@@ -1,0 +1,119 @@
+export type Locale = 'zh-Hans' | 'en'
+export type Format = 'choice' | 'text' | 'tex'
+export type GapStatus = 'unassessed' | 'pending' | 'review_needed' | 'resolved' | 'not_confirmed'
+export type Ref = { materialId: string; page: number }
+export type Course = { id: string; name: string; outlineId: string | null }
+export type Runtime = { provider: 'api' | 'codex_cli'; ready: boolean; error: string | null }
+export type Job = {
+  jobId: string
+  kind: 'import' | 'start' | 'dialogue' | 'question' | 'evaluate'
+  status: 'queued' | 'running' | 'ready' | 'failed'
+  stage: 'queued' | 'parsing' | 'generating' | 'ready'
+  error: string | null
+}
+export type Material = {
+  id: string
+  filename: string
+  status: 'queued' | 'parsing' | 'generating' | 'ready' | 'failed' | 'superseded'
+  active: boolean
+  pageCount: number
+  unreadablePages: number[]
+}
+export type Catalog = { course: Course; materials: Material[]; jobs: Job[] }
+export type Topic = {
+  id: string
+  parentId: string | null
+  position: number
+  title: string
+  status?: GapStatus
+  coverage: 'supported' | 'missing' | 'prerequisite'
+  explanation: string
+  opening: string
+  sources: Ref[]
+}
+export type Gap = {
+  id: string
+  topicId: string
+  sessionId: string
+  description: string
+  status: GapStatus
+  reason: string | null
+  trigger: string
+  evidence?: string
+  checkId?: string
+}
+export type ReviewGroup = { topic: Topic; count: number; gaps: Gap[] }
+export type SessionItem = { id: string; topicId: string | null; updated: string; title: string | null }
+export type CheckStatus = 'open' | 'submitted' | 'graded' | 'abandoned'
+export type Session = {
+  id: string
+  outlineId: string
+  topicId: string | null
+  topic: Topic | null
+  locale: Locale
+  messages: { id: string; role: 'student' | 'tutor'; text: string; sources: Ref[] }[]
+  gaps: Gap[]
+  check: { id: string; status: CheckStatus } | null
+  jobs: Job[]
+}
+export type Answer = string | Record<string, string>
+export type Attempt = {
+  id: string
+  answer: Answer
+  reason: string
+  result: {
+    correctness: 'correct' | 'incorrect' | 'uncertain'
+    evidence: string
+    feedback: string | null
+    feedbackCode: string | null
+    gapStatus: GapStatus | null
+  } | null
+}
+export type Check = {
+  id: string
+  locale: Locale
+  sessionId: string
+  status: CheckStatus
+  format: Format
+  prompt: string
+  requiresReason: boolean
+  options: { id: string; text: string }[]
+  fields: { id: string; label: string }[]
+  attempt?: Attempt
+  solution?: string
+  sources?: Ref[]
+}
+export type Source = Ref & { filename: string; text: string; status: string; url: string }
+
+export class ApiError extends Error {
+  constructor(public code: string) {
+    super(code)
+  }
+}
+
+export async function api<T>(path: string, method = 'GET', body?: FormData | object): Promise<T> {
+  const json = body !== undefined && !(body instanceof FormData)
+  const response = await fetch('/api/v1' + path, {
+    method,
+    headers: json ? { 'Content-Type': 'application/json' } : undefined,
+    body: json ? JSON.stringify(body) : body as FormData | undefined,
+  })
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null)
+    throw new ApiError(payload?.error?.code ?? 'connection_error')
+  }
+  return response.json() as Promise<T>
+}
+
+export const uid = () => crypto.randomUUID()
+export const pendingJob = (job: Job) => job.status === 'queued' || job.status === 'running'
+export const coursePath = (id: string) => '/courses/' + id
+
+export function remembered(key: string): string | null {
+  return localStorage.getItem('tutor.' + key)
+}
+
+export function remember(key: string, value: string | null): void {
+  if (value === null) localStorage.removeItem('tutor.' + key)
+  else localStorage.setItem('tutor.' + key, value)
+}
