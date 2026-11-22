@@ -1,9 +1,10 @@
 import hashlib
 import json
 import re
+from threading import Lock
 from pathlib import PurePosixPath
 
-from .contracts import Dialogue, Evaluation, Hypothesis, Question, QuestionAudit, TopicSelection
+from .contracts import Dialogue, Evaluation, Hypothesis, Question, QuestionAudit, RuntimeSettings, TopicSelection
 from .grading import UnsupportedMath, match_tex, normalize_text, tex_value
 from .jobs import AppError, Job, JobWorker, complete, create_job, find_job, lookup
 from .localization import Localizer
@@ -56,6 +57,23 @@ class TutorService:
         self.provider = provider
         self.localizer = Localizer(store, provider)
         self.worker = JobWorker(store, self.run)
+        self.runtime_lock = Lock()
+
+    def configure_runtime(self, settings: RuntimeSettings):
+        with self.runtime_lock:
+            try:
+                candidate = self.provider.configured(settings)
+            except ModelError as error:
+                raise AppError(error.code, 422) from error
+            status = candidate.status()
+            if not status["ready"]:
+                raise AppError(status["error"], 422)
+            with self.store.connect(write=True) as db:
+                if db.execute("SELECT 1 FROM jobs WHERE status IN ('queued', 'running') LIMIT 1").fetchone():
+                    raise AppError("runtime_busy", 409)
+                self.provider = candidate
+                self.localizer.provider = candidate
+            return status
 
     @staticmethod
     def locale(db):

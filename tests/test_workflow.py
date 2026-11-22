@@ -2,10 +2,12 @@ import io
 import json
 import os
 import re
+import subprocess
 import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from urllib.error import HTTPError
 from uuid import uuid4
 from unittest.mock import patch
 
@@ -17,7 +19,7 @@ from tutor.grading import match_tex
 from tutor.contracts import TopicSelection
 from tutor.main import create_app
 from tutor.materials import read_pdf
-from tutor.models import ModelError, Provider
+from tutor.models import ModelError, Provider, discover_codex
 
 
 BASE = "/api/v1"
@@ -330,6 +332,7 @@ class ModelAdapterTests(unittest.TestCase):
         with patch.dict(os.environ, {
             "AI_TUTOR_PROVIDER": "api", "AI_TUTOR_API_MODEL": "local-test-model",
             "AI_TUTOR_API_KEY": "test-key", "AI_TUTOR_API_BASE_URL": "https://example.invalid/v1",
+            "AI_TUTOR_API_REASONING_EFFORT": "",
         }), patch("tutor.models.build_opener") as opener:
             opener.return_value.open.return_value.__enter__.return_value.read.return_value = json.dumps(payload).encode()
             result = Provider().generate("select_topic", "Select a topic.", {"locale": "en"}, TopicSelection)
@@ -341,3 +344,164 @@ class ModelAdapterTests(unittest.TestCase):
         self.assertFalse(submitted["store"])
         self.assertTrue(submitted["text"]["format"]["strict"])
         self.assertEqual(submitted["text"]["format"]["schema"], TopicSelection.model_json_schema())
+        self.assertNotIn("reasoning", submitted)
+
+    def test_responses_api_sends_effort_and_reports_unsupported_level(self):
+        details = io.BytesIO(b'{"error":{"param":"reasoning.effort","message":"Unsupported value"}}')
+        rejected = HTTPError("https://example.invalid/v1/responses", 400, "Bad Request", {}, details)
+        with patch.dict(os.environ, {
+            "AI_TUTOR_PROVIDER": "api", "AI_TUTOR_API_MODEL": "configured-api-model",
+            "AI_TUTOR_API_KEY": "test-key", "AI_TUTOR_API_BASE_URL": "https://example.invalid/v1",
+            "AI_TUTOR_API_REASONING_EFFORT": "high",
+        }), patch("tutor.models.build_opener") as opener:
+            opener.return_value.open.side_effect = rejected
+            with self.assertRaises(ModelError) as error:
+                Provider().generate("select_topic", "Select a topic.", {"locale": "en"}, TopicSelection)
+            request = opener.return_value.open.call_args.args[0]
+        self.assertEqual(error.exception.code, "reasoning_effort_unsupported")
+        body = json.loads(request.data)
+        self.assertEqual(body["model"], "configured-api-model")
+        self.assertEqual(body["reasoning"], {"effort": "high"})
+
+    def test_codex_cli_applies_model_and_reasoning_only_when_configured(self):
+        def complete(command, **kwargs):
+            (kwargs["cwd"] / "result.json").write_text('{"locale":"en","topicKey":"p_value"}', encoding="utf-8")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with patch.dict(os.environ, {
+            "AI_TUTOR_PROVIDER": "codex_cli", "AI_TUTOR_CODEX_MODEL": "gpt-custom-codex",
+            "AI_TUTOR_CODEX_REASONING_EFFORT": "xhigh",
+        }), patch("tutor.models.discover_codex", return_value="codex.exe"), patch.object(
+            Provider, "_cli_status", return_value=None,
+        ), patch("tutor.models.subprocess.run", side_effect=complete) as run:
+            Provider().generate("select_topic", "Select a topic.", {"locale": "en"}, TopicSelection)
+            command = run.call_args.args[0]
+            self.assertIn("--model=gpt-custom-codex", command)
+            setting = command.index('model_reasoning_effort="xhigh"')
+            self.assertEqual(command[setting - 1], "-c")
+            self.assertEqual(command[-1], "-")
+            with patch.dict(os.environ, {"AI_TUTOR_CODEX_MODEL": "", "AI_TUTOR_CODEX_REASONING_EFFORT": ""}):
+                Provider().generate("select_topic", "Select a topic.", {"locale": "en"}, TopicSelection)
+            self.assertFalse(any("reasoning_effort" in arg or arg.startswith("--model") for arg in run.call_args.args[0]))
+
+    def test_cli_status_distinguishes_missing_executable_and_launch_failure(self):
+        with patch.dict(os.environ, {"AI_TUTOR_PROVIDER": "codex_cli", "AI_TUTOR_CODEX_BIN": "C:/custom/codex.exe"}):
+            provider = Provider()
+        with patch("tutor.models.discover_codex", return_value=None):
+            self.assertEqual(provider.status()["error"], "cli_path")
+        with patch("tutor.models.discover_codex", return_value="codex.exe"):
+            with patch("tutor.models.subprocess.run", side_effect=OSError("permission denied")):
+                self.assertEqual(provider.status()["error"], "cli_launch_failed")
+            with patch("tutor.models.subprocess.run", side_effect=subprocess.TimeoutExpired("codex", 8)):
+                self.assertEqual(provider.status()["error"], "cli_status_timeout")
+
+    def test_api_catalog_uses_draft_endpoint_and_model_capabilities(self):
+        def respond(request, **_):
+            self.assertEqual(request.get_header("Authorization"), "Bearer draft-key")
+            if request.full_url == "https://draft.invalid/api/v1/models":
+                return io.BytesIO(json.dumps({"data": [
+                    {"id": "draft-text", "supported_reasoning_efforts": ["minimal", "high"]},
+                    {"id": "verify", "display_name": "Verify"},
+                ]}).encode())
+            if request.full_url == "https://draft.invalid/api/v1/models/verify":
+                return io.BytesIO(b'{"id":"verify"}')
+            self.assertEqual(request.full_url, "https://draft.invalid/api/v1/responses/input_tokens")
+            payload = json.loads(request.data)
+            self.assertEqual(payload["model"], "verify")
+            if payload.get("reasoning", {}).get("effort") in (None, "none", "xhigh"):
+                return io.BytesIO(b'{"object":"response.input_tokens","input_tokens":1}')
+            raise HTTPError(request.full_url, 400, "Unsupported reasoning effort", {}, io.BytesIO())
+
+        with patch("tutor.model_catalog.build_opener") as opener, TemporaryDirectory() as directory, TestClient(
+            create_app(Path(directory)), base_url="http://127.0.0.1",
+        ) as client:
+            opener.return_value.open.side_effect = respond
+            draft = {"provider": "api", "apiBaseUrl": "https://draft.invalid/api/v1/responses", "apiKey": "draft-key"}
+            response = client.post(BASE + "/runtime/models", json=draft)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertNotIn("draft-key", response.text)
+            listed = response.json()["models"]
+            self.assertEqual([model["id"] for model in listed], ["draft-text", "verify"])
+            self.assertEqual(listed[0]["reasoningEfforts"], ["minimal", "high"])
+            self.assertIsNone(listed[1]["reasoningEfforts"])
+            details = client.post(BASE + "/runtime/model-efforts", json={**draft, "model": "verify"})
+            self.assertEqual(details.status_code, 200, details.text)
+            self.assertEqual(details.json()["reasoningEfforts"], ["none", "xhigh"])
+
+    def test_api_without_token_count_shows_default_only(self):
+        with patch("tutor.model_catalog.build_opener") as opener, TemporaryDirectory() as directory, TestClient(
+            create_app(Path(directory)), base_url="http://127.0.0.1",
+        ) as client:
+            opener.return_value.open.side_effect = [
+                io.BytesIO(b'{"id":"basic"}'),
+                HTTPError("https://api.invalid/v1/responses/input_tokens", 404, "Not found", {}, io.BytesIO()),
+            ]
+            response = client.post(BASE + "/runtime/model-efforts", json={
+                "provider": "api", "apiBaseUrl": "https://api.invalid/v1", "apiKey": "test-key", "model": "basic",
+            })
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertIsNone(response.json()["reasoningEfforts"])
+            self.assertEqual(opener.return_value.open.call_count, 2)
+
+    @unittest.skipUnless(os.name == "nt", "Windows app package discovery")
+    def test_codex_desktop_installation_without_path_entry(self):
+        bundled = r"C:\Program Files\WindowsApps\OpenAI.Codex\app\resources\codex.exe"
+        with patch("tutor.models.shutil.which", side_effect=[None, bundled]) as which, patch(
+            "tutor.models.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 0, bundled + "\r\n", ""),
+        ):
+            self.assertEqual(discover_codex(None), bundled)
+        self.assertEqual(which.call_args.args, (bundled,))
+
+    def test_runtime_can_switch_backends_without_exposing_key(self):
+        cli = subprocess.CompletedProcess([], 0, "Logged in using ChatGPT", "")
+        with patch.dict(os.environ, {
+            "AI_TUTOR_PROVIDER": "codex_cli", "AI_TUTOR_API_MODEL": "", "AI_TUTOR_API_KEY": "",
+            "OPENAI_API_KEY": "", "AI_TUTOR_API_BASE_URL": "https://api.openai.com/v1",
+            "AI_TUTOR_API_REASONING_EFFORT": "", "AI_TUTOR_CODEX_MODEL": "", "AI_TUTOR_CODEX_REASONING_EFFORT": "",
+        }), patch("tutor.models.discover_codex", return_value="codex.exe"), patch(
+            "tutor.models.subprocess.run", return_value=cli,
+        ), TemporaryDirectory() as directory, TestClient(
+            create_app(Path(directory)), base_url="http://127.0.0.1",
+        ) as client:
+            runtime = BASE + "/runtime/status"
+            settings = BASE + "/runtime/settings"
+            self.assertEqual(client.get(runtime).json()["provider"], "codex_cli")
+            codex = client.patch(settings, json={
+                "provider": "codex_cli", "codexModel": "configured-codex", "codexReasoningEffort": "xhigh",
+            })
+            self.assertEqual(codex.status_code, 200, codex.text)
+            self.assertEqual(codex.json()["codexReasoningEffort"], "xhigh")
+            payload = {
+                "provider": "api", "apiModel": "example-model",
+                "apiReasoningEffort": "high",
+                "apiBaseUrl": "https://example.invalid/v1/responses/",
+            }
+            response = client.patch(settings, json=payload)
+            self.assertEqual(response.json()["error"]["code"], "api_key_required")
+            self.assertEqual(client.get(runtime).json()["provider"], "codex_cli")
+            secret = "sample-in-memory-key"
+            switched = client.patch(settings, json={**payload, "apiKey": secret})
+            self.assertEqual(switched.status_code, 200, switched.text)
+            self.assertNotIn(secret, switched.text)
+            self.assertEqual(switched.json()["apiBaseUrl"], "https://example.invalid/v1")
+            self.assertEqual(switched.json()["apiReasoningEffort"], "high")
+            self.assertEqual(switched.json()["codexModel"], "configured-codex")
+            self.assertEqual(client.get(runtime).json()["provider"], "api")
+            wrong_origin = client.patch(settings, json={**payload, "apiBaseUrl": "https://other.invalid/v1"})
+            self.assertEqual(wrong_origin.json()["error"]["code"], "api_key_required")
+            self.assertEqual(client.get(runtime).json()["apiBaseUrl"], "https://example.invalid/v1")
+            self.assertFalse(client.patch(settings, json={
+                **payload, "apiBaseUrl": "https://user:pass@example.invalid/v1",
+            }).is_success)
+            codex = client.patch(settings, json={"provider": "codex_cli"}).json()
+            self.assertEqual(codex["provider"], "codex_cli")
+            self.assertEqual(codex["codexReasoningEffort"], "xhigh")
+            api = client.patch(settings, json={"provider": "api", "apiModel": "another-model"}).json()
+            self.assertTrue(api["ready"])
+            self.assertEqual(api["apiReasoningEffort"], "high")
+            reset = client.patch(settings, json={"provider": "api", "apiReasoningEffort": None}).json()
+            self.assertIsNone(reset["apiReasoningEffort"])
+            self.assertEqual(reset["apiModel"], "another-model")
+            self.assertEqual(client.patch(settings, json={"provider": "api", "apiReasoningEffort": "ultra"}).status_code, 422)
+            self.assertNotIn(secret, Path(directory, "tutor.sqlite3").read_bytes().decode("latin1"))

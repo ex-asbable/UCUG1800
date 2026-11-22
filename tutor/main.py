@@ -10,8 +10,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from .contracts import Locale, QuestionFormat
+from .contracts import Locale, ModelCatalogRequest, ModelEffortsRequest, QuestionFormat, RuntimeSettings
 from .jobs import AppError, lookup, public_job
+from .model_catalog import list_models, model_efforts
 from .models import ModelError, Provider
 from .service import TutorService
 from .storage import Store, new_id, now
@@ -147,6 +148,18 @@ def create_app(data_directory: Path | None = None, provider=None):
     @api.get("/runtime/status")
     def runtime(request: Request):
         return service(request).provider.status()
+
+    @api.patch("/runtime/settings")
+    def configure_runtime(body: RuntimeSettings, request: Request):
+        return service(request).configure_runtime(body)
+
+    @api.post("/runtime/models")
+    def runtime_models(body: ModelCatalogRequest, request: Request):
+        return list_models(service(request).provider, body)
+
+    @api.post("/runtime/model-efforts")
+    def runtime_model_efforts(body: ModelEffortsRequest, request: Request):
+        return model_efforts(service(request).provider, body)
 
     @api.get("/courses")
     def courses(request: Request):

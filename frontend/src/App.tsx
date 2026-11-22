@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import {
   AlertCircle, BookOpen, CheckCircle2, ChevronRight, ClipboardList, FileText, GraduationCap,
-  History, Languages, LoaderCircle, MessageSquarePlus, Plus, Send, Upload, X,
+  History, Languages, LoaderCircle, MessageSquarePlus, Plus, Send, Settings2, Upload, X,
 } from 'lucide-react'
 import {
   api, ApiError, coursePath, pendingJob, remember, remembered, uid,
@@ -11,6 +11,7 @@ import {
 import { copy, explain, pageLabel } from './copy'
 import { Empty, Jobs, MathText, Modal, SourceModal, Sources, TopicButton } from './components'
 import { IndependentCheck } from './IndependentCheck'
+import { ModelSettings } from './ModelSettings'
 
 type ViewData = {
   locale: Locale
@@ -39,6 +40,7 @@ export function App() {
   const [loadingLanguage, setLoadingLanguage] = useState(false)
   const [courses, setCourses] = useState<Course[] | null>(null)
   const [runtime, setRuntime] = useState<Runtime | null>(null)
+  const [showRuntimeSettings, setShowRuntimeSettings] = useState(false)
   const [courseId, setCourseId] = useState('')
   const [catalog, setCatalog] = useState<Catalog | null>(null)
   const [data, setData] = useState<ViewData | null>(null)
@@ -64,6 +66,7 @@ export function App() {
   const busyNow = useRef(false)
   const requests = useRef(new Map<string, string>())
   const sessionEnd = useRef<HTMLDivElement>(null)
+  const catalogSignature = useRef<{ courseId: string; value: string } | null>(null)
   const t = copy(locale)
 
   const currentCatalog = catalog?.course.id === courseId ? catalog : null
@@ -101,8 +104,8 @@ export function App() {
     setCourseId(id)
     setTopicId('')
     setView('tutor')
-    selectSession(remembered('session.' + id) ?? '', id)
-    remember('course', id)
+    selectSession(id ? remembered('session.' + id) ?? '' : '', id)
+    remember('course', id || null)
   }
 
   useEffect(() => {
@@ -112,7 +115,7 @@ export function App() {
       setLocale(pref.locale)
       setCourses(list.courses)
       const initial = list.courses.find((course) => course.id === remembered('course')) ?? list.courses[0]
-      if (initial) selectCourse(initial.id)
+      selectCourse(initial?.id ?? '')
     }).catch((problem) => { if (live) setError(code(problem)) })
     api<Runtime>('/runtime/status').then((status) => { if (live) setRuntime(status) }).catch(() => {})
     return () => { live = false }
@@ -123,25 +126,51 @@ export function App() {
   useEffect(() => {
     if (!courseId) return
     let live = true
-    let previous: string | null = null
-    let timer: ReturnType<typeof setTimeout>
+    let timer: ReturnType<typeof setTimeout> | undefined
     const poll = async () => {
       try {
         const value = await api<Catalog>(coursePath(courseId) + '/materials')
         if (!live) return
         const signature = JSON.stringify([value.course.outlineId, value.jobs.map((job) => [job.jobId, job.status])])
-        if (previous !== null && signature !== previous) reload()
-        previous = signature
+        const previous = catalogSignature.current
+        catalogSignature.current = { courseId, value: signature }
         setCatalog(value)
+        if (previous?.courseId === courseId && signature !== previous.value) {
+          reload()
+        } else if (value.jobs.some(pendingJob)) {
+          timer = setTimeout(poll, 1200)
+        }
       } catch (problem) {
-        if (live) setError(code(problem))
-      } finally {
-        if (live) timer = setTimeout(poll, 1200)
+        if (!live) return
+        if (problem instanceof ApiError && problem.status === 404) {
+          remember('session.' + courseId, null)
+          let remaining = (courses ?? []).filter((course) => course.id !== courseId)
+          try {
+            const list = await api<{ courses: Course[] }>('/courses')
+            remaining = list.courses.filter((course) => course.id !== courseId)
+          } catch (refreshError) {
+            if (live) setError(code(refreshError))
+          }
+          if (live) {
+            setCourses(remaining)
+            selectCourse(remaining[0]?.id ?? '')
+            setViewError('')
+          }
+          return
+        }
+        setError(code(problem))
+        timer = setTimeout(poll, 4000)
       }
     }
     void poll()
     return () => { live = false; clearTimeout(timer) }
-  }, [courseId])
+  }, [courseId, version])
+
+  useEffect(() => {
+    function refreshOnReturn() { if (document.visibilityState === 'visible') reload() }
+    document.addEventListener('visibilitychange', refreshOnReturn)
+    return () => document.removeEventListener('visibilitychange', refreshOnReturn)
+  }, [])
 
   useEffect(() => {
     if (!courseId || loadingLanguage) return
@@ -156,7 +185,11 @@ export function App() {
       if (live && [outline.locale, list.locale, review.locale].every((value) => value === locale)) {
         setData({ locale, courseId, topics: outline.topics, sessions: list.sessions, review: review.topics })
       }
-    }).catch((problem) => { if (live) setViewError(code(problem)) })
+    }).catch((problem) => {
+      if (live && !(problem instanceof ApiError && problem.status === 404)) {
+        setViewError(code(problem))
+      }
+    })
     return () => { live = false }
   }, [courseId, locale, loadingLanguage, version])
 
@@ -168,7 +201,15 @@ export function App() {
         setSession(value)
         if (value.check?.status === 'open' || value.check?.status === 'submitted') setExplicitCheckId(value.check.id)
       }
-    }).catch((problem) => { if (live) setViewError(code(problem)) })
+    }).catch((problem) => {
+      if (!live) return
+      if (problem instanceof ApiError && problem.status === 404) {
+        setSession(null)
+        selectSession('')
+      } else {
+        setViewError(code(problem))
+      }
+    })
     return () => { live = false }
   }, [sessionId, locale, loadingLanguage, version])
 
@@ -340,10 +381,15 @@ export function App() {
     <header className="topbar">
       <div className="brand"><span className="brand-icon"><GraduationCap size={25} /></span><span>AI Tutor</span></div>
       <div className="top-actions">
-        {runtime && <span className={'runtime ' + (runtime.ready ? 'runtime-ready' : 'runtime-error')}
-          title={runtime.error ? explain(runtime.error, locale) : t.runtime}>
-          <i /> {runtime.provider === 'api' ? 'Model API' : 'Codex CLI'}
-        </span>}
+        <button className={'runtime ' + (runtime?.ready ? 'runtime-ready' : 'runtime-error')}
+          aria-label={t.runtimeSettings} title={runtime?.error ? explain(runtime.error, locale) : t.runtimeSettings}
+          onClick={() => runtime ? setShowRuntimeSettings(true) : void act(async () => {
+            setRuntime(await api<Runtime>('/runtime/status'))
+            setShowRuntimeSettings(true)
+          })}>
+          <Settings2 size={16} /><span>{runtime?.provider === 'api' ? t.modelApi : runtime ? 'Codex CLI' : t.runtime}</span>
+          {runtime && <i />}
+        </button>
         <label className="language-select"><Languages size={17} aria-hidden="true" />
           <select aria-label={t.language} value={locale} disabled={loadingLanguage}
             onChange={(event) => void switchLanguage(event.target.value as Locale)}>
@@ -418,8 +464,10 @@ export function App() {
           {!courses && <button className="text-button" onClick={() => { setError(''); setInitialVersion((value) => value + 1) }}>{t.retry}</button>}
           <button className="icon-button" aria-label={t.dismiss} onClick={() => setError('')}><X size={17} /></button>
         </div>}
-        {!!runtime?.error && <div className="warning-banner" role="status"><AlertCircle size={18} />{explain(runtime.error, locale)}</div>}
-        {viewError && <div className="warning-banner" role="alert"><AlertCircle size={18} />
+        {!!runtime?.error && <div className="warning-banner" role="status"><AlertCircle size={18} /><span>{explain(runtime.error, locale)}</span>
+          <button className="text-button" onClick={() => setShowRuntimeSettings(true)}>{t.runtimeSettings}</button>
+        </div>}
+        {courseId && viewError && <div className="warning-banner" role="alert"><AlertCircle size={18} />
           <span>{explain(viewError, locale)}</span><button className="text-button" onClick={reload}>{t.retry}</button>
         </div>}
         {!courses ? <div className="loading" role="status"><LoaderCircle className="spin" size={20} />{t.loadingCourse}</div>
@@ -560,6 +608,14 @@ export function App() {
         <button className="text-button" onClick={reload}>{t.retry}</button>
       </div> : <div className="loading"><LoaderCircle className="spin" size={18} />{t.loading}</div>}
     </Modal>)}
+    {showRuntimeSettings && runtime && <ModelSettings runtime={runtime} locale={locale} t={t}
+      close={() => setShowRuntimeSettings(false)} saved={(status) => {
+        setRuntime(status)
+        setShowRuntimeSettings(false)
+        setError('')
+        reload()
+      }}
+    />}
     {source && <SourceModal source={source} locale={locale} t={t} close={() => setSource(null)} />}
   </div>
 }

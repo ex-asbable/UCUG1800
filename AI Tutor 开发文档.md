@@ -237,7 +237,7 @@ CLI 在本机启动，模型响应由联网服务生成。以 ChatGPT 登录时�
 1. 在设置或启动检查中执行 `codex --version` 和 `codex login status`，确认 CLI 可用且当前认证方式为 ChatGPT。需要登录时，用户在终端运行 `codex login`。编写本文时，本机状态检查已显示 `Logged in using ChatGPT`。
 2. 后端用固定的可执行文件和参数列表启动 `codex exec`，通过标准输入 `-` 传入约定的任务数据。使用独立临时目录和 `--skip-git-repo-check` 运行，启用 `--sandbox read-only` 与 `--ephemeral`。应用按本机支持的配置禁用 Shell、插件和搜索，并通过 `--ignore-user-config` 避免载入个人项目工具配置。
 3. 用 `--output-schema` 约束最终响应的结构，通过 `--output-last-message` 读取最终输出。应用再次校验结构、来源和业务状态后入库。CLI 认证沿用其本地登录机制，传给 CLI 的环境保持独立于 API 模式的认证配置。
-4. 接口处理 CLI 缺失、未以 ChatGPT 登录、联网失败、超时、用量受限和结构校验失败。失败时保留原始课件和学生作答，允许在同一任务上重试。界面显示当前后端，用户可修改本机配置并重启服务切换。 [Codex CLI 参数](https://learn.chatgpt.com/docs/cli/reference) · [非交互输出格式](https://learn.chatgpt.com/docs/non-interactive-mode)
+4. 接口处理 CLI 缺失、启动失败、未以 ChatGPT 登录、联网失败、超时、用量受限和结构校验失败。失败时保留原始课件和学生作答，允许在同一任务上重试。用户可在任务空闲时从模型设置切换本次运行的后端。启动默认值从本机环境变量读取。 [Codex CLI 参数](https://learn.chatgpt.com/docs/cli/reference) · [非交互输出格式](https://learn.chatgpt.com/docs/non-interactive-mode)
 
 #### 5.7 本机配置和数据
 
@@ -300,6 +300,9 @@ CLI 在本机启动，模型响应由联网服务生成。以 ChatGPT 登录时�
 | `POST /checks/{checkId}/attempts` | 选项 ID 或各空的输入、题目要求的关键理由、请求标识 | 作答 ID、判定与依据、卡点新状态及相关知识点 |
 | `GET /courses/{courseId}/review` | 课程 ID | 按当前作答证据排序的复习清单 |
 | `GET /runtime/status` | 无 | 当前模型后端和本机依赖的就绪状态 |
+| `PATCH /runtime/settings` | 后端类型、该后端的模型 ID 和思考强度，以及 API 模式可选的地址和密钥 | 本次运行的后端和两套模型设置。输入的密钥留在服务内存中 |
+| `POST /runtime/models` | 后端类型，以及 API 模式可选的地址和密钥 | 该后端返回的可用模型及已有的强度信息 |
+| `POST /runtime/model-efforts` | API 模型 ID，可选的地址和密钥 | 从模型详情或输入 token 计数接口获取的思考强度 |
 
 生成类请求按保存的偏好记录 `locale`。接口返回 Tutor 内容时同时返回语言标记。等待生成所选语言的内容时，界面显示对应语言的加载或重试提示。
 
@@ -626,7 +629,7 @@ The CLI runs locally and receives model responses from an online service. A Chat
 1. Run `codex --version` and `codex login status` in the settings or startup check to confirm that the CLI is available and uses ChatGPT authentication. A user who needs to sign in can run `codex login` in a terminal. On the reference computer, the check reported `Logged in using ChatGPT` when this draft was written.
 2. Start `codex exec` using a fixed executable and argument list, and pass the task data on standard input with `-`. Run it in a dedicated temporary directory with `--skip-git-repo-check`, `--sandbox read-only`, and `--ephemeral`. Disable shell, plugin, and search tools using supported local settings, and use `--ignore-user-config` to avoid loading tools from personal configuration.
 3. Use `--output-schema` to constrain the final response and `--output-last-message` to read it. Validate the structure, citations, and business status before saving. Let the CLI manage its own login and keep API-mode credentials out of the CLI process environment.
-4. Handle a missing CLI, a missing ChatGPT sign-in, connectivity problems, timeouts, usage limits, and invalid response schemas. Keep materials and submitted answers so the student can retry the same task. Show the active backend. The user can switch backends by changing local configuration and restarting the service. [Codex CLI options](https://learn.chatgpt.com/docs/cli/reference) · [Non-interactive output](https://learn.chatgpt.com/docs/non-interactive-mode)
+4. Handle a missing CLI, launch errors, a missing ChatGPT sign-in, connectivity problems, timeouts, usage limits, and invalid response schemas. Keep materials and submitted answers so the student can retry the same task. The user can switch backends for the current run from Model settings while jobs are idle. The service reads startup defaults from local environment variables. [Codex CLI options](https://learn.chatgpt.com/docs/cli/reference) · [Non-interactive output](https://learn.chatgpt.com/docs/non-interactive-mode)
 
 #### 5.7 Local configuration and data
 
@@ -689,6 +692,9 @@ Use the `/api/v1` prefix. Upload files as form requests and use JSON for other r
 | `POST /checks/{checkId}/attempts` | Selected option ID or blank values, any required reason, request ID | Attempt ID, result and evidence, new gap status, and topic |
 | `GET /courses/{courseId}/review` | Course ID | Review list ordered by current answer evidence |
 | `GET /runtime/status` | None | Active model backend and local dependency status |
+| `PATCH /runtime/settings` | Backend type, its model ID and reasoning effort, and optional API URL and key | Active backend for this run and both sets of model settings. Entered keys stay in service memory |
+| `POST /runtime/models` | Backend type and optional API URL and key | The backend's available models and any advertised reasoning levels |
+| `POST /runtime/model-efforts` | API model ID and optional API URL and key | Reasoning levels from model details or input token counting |
 
 A generation request captures the saved `locale`. Tutor content responses include a language marker. Show loading or retry copy in the active language while Tutor content for that language is being generated.
 

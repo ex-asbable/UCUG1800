@@ -40,7 +40,11 @@ textarea { resize: vertical; }
   box-shadow: 0 5px 12px #5932ae26;
 }
 .top-actions { display: flex; align-items: center; gap: 15px; }
-.runtime { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: .83rem; white-space: nowrap; }
+.runtime { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: .83rem; white-space: nowrap; border: 1px solid var(--edge); border-radius: 9px; background: #fff; padding: 7px 9px; }
+.runtime:hover { background: var(--lavender); color: var(--purple-dark); }
+.runtime-form { display: grid; gap: 12px; }
+.runtime-form .modal-footer { margin-top: 2px; }
+.model-picker-header { display: flex; justify-content: flex-end; }
 .runtime i { width: 7px; height: 7px; background: #bf790a; border-radius: 50%; }
 .runtime-ready i { background: #26816d; }
 .language-select { display: flex; align-items: center; gap: 7px; color: var(--muted); }
@@ -249,7 +253,7 @@ blockquote { color: var(--muted); border-inline-start: 3px solid #c7b0e8; margin
   .brand-icon { width: 34px; height: 34px; border-radius: 10px; }
   .brand-icon svg { width: 20px; }
   .top-actions { gap: 7px; }
-  .runtime, .language-select > svg { display: none; }
+  .runtime span, .runtime i, .language-select > svg { display: none; }
   .header-upload { min-height: 35px; padding: 6px 8px; font-size: .83rem; }
   .app-body { display: flex; flex-direction: column; }
   .sidebar { position: static; height: auto; max-height: 240px; padding: 12px; border-right: 0; border-bottom: 1px solid var(--edge); }

@@ -3,7 +3,23 @@ export type Format = 'choice' | 'text' | 'tex'
 export type GapStatus = 'unassessed' | 'pending' | 'review_needed' | 'resolved' | 'not_confirmed'
 export type Ref = { materialId: string; page: number }
 export type Course = { id: string; name: string; outlineId: string | null }
-export type Runtime = { provider: 'api' | 'codex_cli'; ready: boolean; error: string | null }
+export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'
+export type Runtime = {
+  provider: 'api' | 'codex_cli'
+  ready: boolean
+  error: string | null
+  apiModel?: string
+  apiBaseUrl?: string
+  apiKeyConfigured?: boolean
+  apiReasoningEffort?: ReasoningEffort | null
+  codexModel?: string
+  codexReasoningEffort?: ReasoningEffort | null
+}
+export type ModelEfforts = {
+  reasoningEfforts: ReasoningEffort[] | null
+  defaultReasoningEffort: ReasoningEffort | null
+}
+export type ModelOption = ModelEfforts & { id: string; name: string; isDefault: boolean }
 export type Job = {
   jobId: string
   kind: 'import' | 'start' | 'dialogue' | 'question' | 'evaluate'
@@ -86,21 +102,22 @@ export type Check = {
 export type Source = Ref & { filename: string; text: string; status: string; url: string }
 
 export class ApiError extends Error {
-  constructor(public code: string) {
+  constructor(public code: string, public status: number) {
     super(code)
   }
 }
 
-export async function api<T>(path: string, method = 'GET', body?: FormData | object): Promise<T> {
+export async function api<T>(path: string, method = 'GET', body?: FormData | object, signal?: AbortSignal): Promise<T> {
   const json = body !== undefined && !(body instanceof FormData)
   const response = await fetch('/api/v1' + path, {
     method,
+    signal,
     headers: json ? { 'Content-Type': 'application/json' } : undefined,
     body: json ? JSON.stringify(body) : body as FormData | undefined,
   })
   if (!response.ok) {
     const payload = await response.json().catch(() => null)
-    throw new ApiError(payload?.error?.code ?? 'connection_error')
+    throw new ApiError(payload?.error?.code ?? 'connection_error', response.status)
   }
   return response.json() as Promise<T>
 }

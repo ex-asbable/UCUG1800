@@ -24,15 +24,16 @@ class Localizer:
             return
         with self.lock:
             translations = {}
+            provider = self.provider
             for source, texts in groups.items():
                 translations.update(((source, text), translated) for text, translated in (
-                    self._translate(source, target, sorted(texts)).items()
+                    self._translate(provider, source, target, sorted(texts)).items()
                 ))
         for obj, field, source in views:
             if (source, obj.get(field)) in translations:
                 obj[field] = translations[source, obj[field]]
 
-    def _translate(self, source, target, texts):
+    def _translate(self, provider, source, target, texts):
         cached = {}
         with self.store.connect() as db:
             for text in texts:
@@ -56,7 +57,7 @@ class Localizer:
 
                 masks.append(MATH.sub(mask, text))
                 math.append(pieces)
-            result = self.provider.generate(
+            result = provider.generate(
                 "translate",
                 "Translate texts in the same order, one translation per input. Preserve all "
                 "[[TUTOR_MATH_n]] placeholders exactly. Preserve meaning, numbers, logical conditions, "

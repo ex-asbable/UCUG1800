@@ -1,10 +1,32 @@
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, StringConstraints
 
 
 Locale = Literal["zh-Hans", "en"]
 QuestionFormat = Literal["choice", "text", "tex"]
+ApiReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+CodexReasoningEffort = Literal[ApiReasoningEffort, "ultra"]
+
+
+class ModelCatalogRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: Literal["codex_cli", "api"]
+    apiBaseUrl: Annotated[str, StringConstraints(max_length=1600)] | None = None
+    apiKey: Annotated[SecretStr, Field(max_length=4096)] = SecretStr("")
+
+
+class ModelEffortsRequest(ModelCatalogRequest):
+    provider: Literal["api"]
+    model: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=240)]
+
+
+class RuntimeSettings(ModelCatalogRequest):
+    codexModel: Annotated[str, StringConstraints(strip_whitespace=True, max_length=240)] | None = None
+    codexReasoningEffort: CodexReasoningEffort | None = None
+    apiModel: Annotated[str, StringConstraints(strip_whitespace=True, max_length=240)] | None = None
+    apiReasoningEffort: ApiReasoningEffort | None = None
 
 
 class Contract(BaseModel):
