@@ -7,7 +7,8 @@ const defaultApiUrl = 'https://api.openai.com/v1'
 const codexQuery = { provider: 'codex_cli' } as const
 type ApiQuery = { provider: 'api'; apiBaseUrl: string; apiKey: string }
 type Query = ApiQuery | typeof codexQuery
-type Catalog = { query: Query; revision: number; models: ModelOption[]; error: string }
+type ModelCatalog = { models: ModelOption[]; codexVersion?: string | null; codexExecutable?: string }
+type Catalog = ModelCatalog & { query: Query; revision: number; error: string }
 
 function requestError(problem: unknown, updateRequired = false) {
   if (!(problem instanceof ApiError)) return 'connection_error'
@@ -62,8 +63,8 @@ export function ModelSettings({ runtime, locale, t, close, saved }: {
   useEffect(() => {
     if (!query) return
     const controller = new AbortController()
-    api<{ models: ModelOption[] }>('/runtime/models', 'POST', query, controller.signal).then(({ models }) => {
-      if (!controller.signal.aborted) setCatalog({ query, revision, models, error: '' })
+    api<ModelCatalog>('/runtime/models', 'POST', query, controller.signal).then((result) => {
+      if (!controller.signal.aborted) setCatalog({ ...result, query, revision, error: '' })
     }).catch((problem) => {
       if (!controller.signal.aborted) setCatalog({ query, revision, models: [], error: requestError(problem, true) })
     })
@@ -130,6 +131,11 @@ export function ModelSettings({ runtime, locale, t, close, saved }: {
         </label>
       </>}
       <div className="model-picker-header">
+        {backend === 'codex_cli' && currentCatalog?.codexVersion && (
+          <small className="model-picker-version" title={currentCatalog.codexExecutable}>
+            Codex CLI {currentCatalog.codexVersion}
+          </small>
+        )}
         <button type="button" className="text-button" onClick={refreshModels} disabled={loadingCatalog || saving}>
           {loadingCatalog ? t.loadingModels : t.refreshModels}
         </button>

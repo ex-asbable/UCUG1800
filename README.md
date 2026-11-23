@@ -26,7 +26,9 @@ $env:AI_TUTOR_PROVIDER = "codex_cli"
 
 浏览器打开 [本机 AI Tutor](http://127.0.0.1:8000/)。右上角会显示当前后端。Codex CLI 使用本机已有授权，模型生成需要联网，并计入账户可用额度。
 
-Windows 上应用先检查启动终端的 PATH，再查找已安装的 Codex 桌面版附带的 CLI。若界面仍报告找不到 CLI，请在启动服务的同一个终端运行 `Get-Command codex -CommandType Application`。如果已知道可执行文件的位置，设置 `$env:AI_TUTOR_CODEX_BIN = "C:\path\to\codex.exe"` 后重启。使用该路径运行 `& $env:AI_TUTOR_CODEX_BIN login status` 可核对登录状态。
+Windows 上应用会比较终端 PATH 中的 CLI 和 Codex 桌面版附带的 CLI，自动选用版本较新的安装。模型目录和辅导使用同一个 CLI。模型设置会显示实际读取目录的 CLI 版本，悬停可查看路径。
+
+若要指定安装，可在启动服务的终端设置 `$env:AI_TUTOR_CODEX_BIN = "C:\path\to\codex.exe"` 后重启。若该变量已指向旧安装，可用 `Remove-Item Env:AI_TUTOR_CODEX_BIN` 恢复自动选择，再重启服务。
 
 ### 使用模型 API
 

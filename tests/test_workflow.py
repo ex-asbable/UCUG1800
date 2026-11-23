@@ -390,6 +390,7 @@ class ModelAdapterTests(unittest.TestCase):
         with patch("tutor.models.discover_codex", return_value=None):
             self.assertEqual(provider.status()["error"], "cli_path")
         with patch("tutor.models.discover_codex", return_value="codex.exe"):
+            provider = Provider(provider.settings)
             with patch("tutor.models.subprocess.run", side_effect=OSError("permission denied")):
                 self.assertEqual(provider.status()["error"], "cli_launch_failed")
             with patch("tutor.models.subprocess.run", side_effect=subprocess.TimeoutExpired("codex", 8)):
@@ -452,6 +453,31 @@ class ModelAdapterTests(unittest.TestCase):
         ):
             self.assertEqual(discover_codex(None), bundled)
         self.assertEqual(which.call_args.args, (bundled,))
+
+    @unittest.skipUnless(os.name == "nt", "Windows PATH and desktop installation selection")
+    def test_old_path_cli_does_not_override_newer_desktop_cli(self):
+        old_cli = r"C:\npm\codex.cmd"
+        desktop_cli = r"C:\Program Files\WindowsApps\OpenAI.Codex\app\resources\codex.exe"
+        versions = {old_cli: "0.151.0", desktop_cli: "0.171.0-alpha.13"}
+
+        def release(command, **kwargs):
+            self.assertNotIn("AI_TUTOR_API_KEY", kwargs["env"])
+            return subprocess.CompletedProcess(command, 0, "codex-cli " + versions[command[0]], "")
+
+        with patch("tutor.models.shutil.which", return_value=old_cli), patch(
+            "tutor.models._desktop_codex", return_value=desktop_cli,
+        ) as desktop, patch("tutor.models.subprocess.run", side_effect=release), patch.dict(
+            os.environ, {"AI_TUTOR_CODEX_BIN": "", "AI_TUTOR_API_KEY": "test-only"},
+        ), patch.object(Provider, "_cli_status", return_value=None):
+            provider = Provider()
+            self.assertEqual(provider.codex_executable(), desktop_cli)
+            self.assertEqual(provider.codex_version, "0.171.0-alpha.13")
+            self.assertEqual(provider.codex_executable(), desktop_cli)
+            desktop.assert_called_once()
+            versions[old_cli] = "0.171.0"
+            self.assertEqual(discover_codex(None), old_cli)
+            self.assertEqual(discover_codex(old_cli), old_cli)
+            self.assertEqual(desktop.call_count, 2)
 
     def test_runtime_can_switch_backends_without_exposing_key(self):
         cli = subprocess.CompletedProcess([], 0, "Logged in using ChatGPT", "")

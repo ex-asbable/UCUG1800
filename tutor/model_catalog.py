@@ -11,7 +11,7 @@ from urllib.parse import quote
 from urllib.request import Request, build_opener
 
 from .contracts import ModelCatalogRequest, ModelEffortsRequest, RuntimeSettings
-from .models import API_REASONING_EFFORTS, CODEX_REASONING_EFFORTS, ModelError, NoRedirects, Provider, api_base_url
+from .models import API_REASONING_EFFORTS, CODEX_REASONING_EFFORTS, ModelError, NoRedirects, Provider, api_base_url, codex_environment
 from .storage import encode
 
 
@@ -62,6 +62,8 @@ class _CodexCatalogProcess:
         try:
             for line in self.process.stdout:
                 self.lines.put(line)
+        except (OSError, ValueError):
+            pass
         finally:
             self.lines.put(None)
 
@@ -100,7 +102,7 @@ def _codex_models(provider: Provider):
     ]
     try:
         with tempfile.TemporaryDirectory(prefix="ai-tutor-models-") as directory, subprocess.Popen(
-            command, cwd=directory, env=provider.codex_environment(), stdin=subprocess.PIPE,
+            command, cwd=directory, env=codex_environment(), stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, encoding="utf-8", errors="replace",
         ) as process:
             try:
@@ -125,7 +127,11 @@ def _codex_models(provider: Provider):
                             models[entry["id"]] = entry
                     cursor = result.get("nextCursor")
                     if not cursor:
-                        return list(models.values())
+                        return {
+                            "models": list(models.values()),
+                            "codexVersion": provider.codex_version,
+                            "codexExecutable": executable,
+                        }
                     if not isinstance(cursor, str) or cursor in cursors:
                         raise ModelError("cli_catalog_unavailable")
                     cursors.add(cursor)
@@ -232,8 +238,9 @@ class _ApiCatalog:
 
 
 def list_models(provider: Provider, query: ModelCatalogRequest):
-    models = _codex_models(provider) if query.provider == "codex_cli" else _ApiCatalog(provider, query).models()
-    return {"models": models}
+    if query.provider == "codex_cli":
+        return _codex_models(provider)
+    return {"models": _ApiCatalog(provider, query).models()}
 
 
 def model_efforts(provider: Provider, query: ModelEffortsRequest):

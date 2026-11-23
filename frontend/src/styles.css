@@ -44,7 +44,8 @@ textarea { resize: vertical; }
 .runtime:hover { background: var(--lavender); color: var(--purple-dark); }
 .runtime-form { display: grid; gap: 12px; }
 .runtime-form .modal-footer { margin-top: 2px; }
-.model-picker-header { display: flex; justify-content: flex-end; }
+.model-picker-header { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
+.model-picker-version { margin-inline-end: auto; color: var(--muted); }
 .runtime i { width: 7px; height: 7px; background: #bf790a; border-radius: 50%; }
 .runtime-ready i { background: #26816d; }
 .language-select { display: flex; align-items: center; gap: 7px; color: var(--muted); }

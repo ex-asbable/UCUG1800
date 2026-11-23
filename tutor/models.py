@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass, field, replace
+from functools import cached_property
 from pathlib import Path
 from typing import get_args
 from urllib.error import HTTPError, URLError
@@ -43,6 +44,15 @@ DEFAULT_API_URL = "https://api.openai.com/v1"
 API_REASONING_EFFORTS = get_args(ApiReasoningEffort)
 CODEX_REASONING_EFFORTS = get_args(CodexReasoningEffort)
 CODEX_MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/:@+-]{0,239}")
+CLI_RELEASE = re.compile(r"\bcodex-cli\s+(\d+)\.(\d+)\.(\d+)(?:-([A-Za-z0-9.-]+))?")
+
+
+def codex_environment() -> dict:
+    hidden = {"OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_API_KEY", "OPENAI_ORG_ID", "OPENAI_PROJECT_ID"}
+    return {
+        key: value for key, value in os.environ.items()
+        if key.upper() not in hidden and not key.upper().startswith("AI_TUTOR_API_")
+    }
 
 
 def api_base_url(value: str) -> str:
@@ -62,14 +72,7 @@ def api_base_url(value: str) -> str:
     return value
 
 
-def discover_codex(command: str | None) -> str | None:
-    if command:
-        return shutil.which(os.path.expandvars(os.path.expanduser(command.strip().strip('"'))))
-    if executable := shutil.which("codex"):
-        return executable
-    if os.name != "nt":
-        return None
-
+def _desktop_codex() -> str | None:
     powershell = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32/WindowsPowerShell/v1.0/powershell.exe"
     try:
         result = subprocess.run(
@@ -89,6 +92,45 @@ def discover_codex(command: str | None) -> str | None:
             if executable := shutil.which(line.strip()):
                 return executable
     return None
+
+
+def _codex_release(executable: str) -> re.Match | None:
+    try:
+        result = subprocess.run(
+            [executable, "--version"], env=codex_environment(), stdin=subprocess.DEVNULL, capture_output=True,
+            encoding="utf-8", errors="replace", timeout=5,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return CLI_RELEASE.search(result.stdout) if result.returncode == 0 else None
+
+
+def _release_order(release: re.Match):
+    major, minor, patch, prerelease = release.groups()
+    identifiers = tuple(
+        (0, int(part)) if part.isdecimal() else (1, part)
+        for part in prerelease.split(".")
+    ) if prerelease else ()
+    return int(major), int(minor), int(patch), prerelease is None, identifiers
+
+
+def discover_codex(command: str | None) -> str | None:
+    if command:
+        return shutil.which(os.path.expandvars(os.path.expanduser(command.strip().strip('"'))))
+    path_executable = shutil.which("codex")
+    if os.name != "nt":
+        return path_executable
+    desktop_executable = _desktop_codex()
+    if not path_executable or not desktop_executable:
+        return path_executable or desktop_executable
+    if os.path.normcase(os.path.abspath(path_executable)) == os.path.normcase(os.path.abspath(desktop_executable)):
+        return path_executable
+    path_release = _codex_release(path_executable)
+    desktop_release = _codex_release(desktop_executable)
+    if desktop_release and (not path_release or _release_order(desktop_release) > _release_order(path_release)):
+        return desktop_executable
+    return path_executable
 
 
 @dataclass(frozen=True)
@@ -119,6 +161,15 @@ class Provider:
         self.settings = settings if settings is not None else self.from_environment()
         if self.settings.kind not in ("api", "codex_cli"):
             raise ValueError("AI_TUTOR_PROVIDER must be api or codex_cli")
+
+    @cached_property
+    def _codex_binary(self) -> str | None:
+        return discover_codex(self.settings.codex_command)
+
+    @cached_property
+    def codex_version(self) -> str | None:
+        release = _codex_release(self._codex_binary) if self._codex_binary else None
+        return release.group().split()[-1] if release else None
 
     @staticmethod
     def from_environment() -> ProviderSettings:
@@ -185,7 +236,7 @@ class Provider:
         if settings.kind == "api":
             error = self._api_config_error()
         else:
-            error = self._codex_config_error() or self._cli_status(discover_codex(settings.codex_command))
+            error = self._codex_config_error() or self._cli_status(self._codex_binary)
         try:
             url = api_base_url(settings.api_url)
         except ModelError:
@@ -269,20 +320,12 @@ class Provider:
         except (AttributeError, KeyError, TypeError) as error:
             raise ModelError("invalid_model_output") from error
 
-    @staticmethod
-    def codex_environment() -> dict:
-        hidden = {"OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_API_KEY", "OPENAI_ORG_ID", "OPENAI_PROJECT_ID"}
-        return {
-            key: value for key, value in os.environ.items()
-            if key.upper() not in hidden and not key.upper().startswith("AI_TUTOR_API_")
-        }
-
     def _cli_status(self, executable: str | None) -> str | None:
         if not executable:
             return "cli_path" if self.settings.codex_command else "cli_missing"
         try:
             result = subprocess.run(
-                [executable, "login", "status"], env=self.codex_environment(), capture_output=True, timeout=8,
+                [executable, "login", "status"], env=codex_environment(), capture_output=True, timeout=8,
                 stdin=subprocess.DEVNULL,
                 encoding="utf-8", errors="replace",
             )
@@ -295,7 +338,7 @@ class Provider:
         return None
 
     def codex_executable(self) -> str:
-        executable = discover_codex(self.settings.codex_command)
+        executable = self._codex_binary
         if error := self._cli_status(executable):
             raise ModelError(error)
         return executable
@@ -322,7 +365,7 @@ class Provider:
             command.append("-")
             try:
                 result = subprocess.run(
-                    command, cwd=root, env=self.codex_environment(),
+                    command, cwd=root, env=codex_environment(),
                     input=f"{SYSTEM}\n{instructions}\n\nStudy data JSON:\n{payload}",
                     capture_output=True, encoding="utf-8", errors="replace", timeout=settings.timeout,
                 )
