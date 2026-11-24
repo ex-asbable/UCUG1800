@@ -267,13 +267,17 @@ blockquote { color: var(--muted); border-inline-start: 3px solid #c7b0e8; margin
   .work-grid { grid-template-columns: minmax(0, 1fr); }
   .study-tools { grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); }
 }
+@media (max-width: 820px) {
+  .top-actions { gap: 9px; }
+  .runtime span, .runtime i { display: none; }
+}
 @media (max-width: 660px) {
   .topbar { height: 62px; padding-inline: 11px; }
   .brand { font-size: 1.21rem; gap: 7px; }
   .brand-icon { width: 34px; height: 34px; border-radius: 10px; }
   .brand-icon svg { width: 20px; }
   .top-actions { gap: 7px; }
-  .runtime span, .runtime i, .language-select > svg { display: none; }
+  .language-select > svg { display: none; }
   .header-upload { min-height: 35px; padding: 6px 8px; font-size: .83rem; }
   .app-body { display: flex; flex-direction: column; }
   .sidebar { position: static; height: auto; max-height: 240px; padding: 12px; border-right: 0; border-bottom: 1px solid var(--edge); }
