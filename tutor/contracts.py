@@ -56,6 +56,11 @@ class Outline(Packet):
     topics: list[Topic]
 
 
+class ReviewGuide(Packet):
+    markdown: str
+    sources: list[Source]
+
+
 class Hypothesis(Contract):
     key: str
     description: str

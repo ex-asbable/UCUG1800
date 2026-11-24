@@ -16,11 +16,11 @@ function restoreDraft(check: Check): Draft {
   return { answer: check.format === 'choice' ? '' : {}, reason: '' }
 }
 
-export function IndependentCheck({ check, jobs, locale, t, busy, error, setLanguage, close, leave, submit, openSource, retry }: {
+export function IndependentCheck({ check, jobs, locale, t, busy, error, setLanguage, close, leave, submit, openSource, materialName, retry }: {
   check: Check; jobs: Job[]; locale: Locale; t: Copy; busy: boolean; error: string
   setLanguage: (value: Locale) => void
   close: () => void; leave: () => void; submit: (answer: Answer, reason: string) => void
-  openSource: (ref: Ref) => void; retry: (job: Job) => void
+  openSource: (ref: Ref) => void; materialName: (ref: Ref) => string; retry: (job: Job) => void
 }) {
   const [draft, setDraft] = useState(() => restoreDraft(check))
   useEffect(() => {
@@ -89,7 +89,7 @@ export function IndependentCheck({ check, jobs, locale, t, busy, error, setLangu
       <p><MathText>{result.feedback || explain(result.feedbackCode ?? 'insufficient_evidence', locale)}</MathText></p>
       {result.evidence && <blockquote>{result.evidence}</blockquote>}
       {check.solution && <details open><summary>{t.solution}</summary><p><MathText>{check.solution}</MathText></p></details>}
-      {!!check.sources?.length && <Sources refs={check.sources} locale={locale} open={openSource} />}
+      {!!check.sources?.length && <Sources refs={check.sources} locale={locale} open={openSource} materialName={materialName} />}
     </div>}
   </Modal>
 }

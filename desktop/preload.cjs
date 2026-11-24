@@ -1,0 +1,12 @@
+const { contextBridge, ipcRenderer } = require('electron')
+
+const preferences = new Map(Object.entries(ipcRenderer.sendSync('tutor:preferences')))
+contextBridge.exposeInMainWorld('tutorDesktop', {
+  remembered: (key) => preferences.get(key) ?? null,
+  remember: (key, value) => {
+    if (value === null) preferences.delete(key)
+    else preferences.set(key, value)
+    ipcRenderer.send('tutor:remember', key, value)
+  },
+  saveMarkdown: (filename, markdown) => ipcRenderer.invoke('tutor:save-markdown', filename, markdown),
+})

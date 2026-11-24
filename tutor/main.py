@@ -1,3 +1,4 @@
+import hmac
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -22,6 +23,7 @@ from .views import Views
 ROOT = Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / "frontend" / "dist"
 FILE_LIMIT = 30 * 1024 * 1024
+FOLDER_LIMIT = 512 * 1024 * 1024
 ApiId = Annotated[str, StringConstraints(pattern=r"^[a-zA-Z0-9_-]{1,80}$")]
 UserText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=6000)]
 FieldValue = Annotated[str, StringConstraints(max_length=2500)]
@@ -56,6 +58,10 @@ class MessageInput(Input):
     text: UserText
 
 
+class GuideInput(Input):
+    outlineId: ApiId
+
+
 class CheckInput(Input):
     requestId: ApiId
     format: QuestionFormat | None = None
@@ -81,7 +87,7 @@ def error_response(code, status):
     )
 
 
-def create_app(data_directory: Path | None = None, provider=None):
+def create_app(data_directory: Path | None = None, provider=None, *, desktop_token: str | None = None):
     @asynccontextmanager
     async def lifespan(application):
         directory = data_directory or Path(os.getenv("AI_TUTOR_DATA_DIR", str(ROOT / ".data")))
@@ -99,14 +105,20 @@ def create_app(data_directory: Path | None = None, provider=None):
 
     @app.middleware("http")
     async def local_requests(request: Request, call_next):
+        if desktop_token and not hmac.compare_digest(
+            request.headers.get("x-ai-tutor-desktop", "").encode(), desktop_token.encode(),
+        ):
+            return error_response("request_origin", 403)
         if request.method not in ("GET", "HEAD", "OPTIONS"):
             origin = request.headers.get("origin")
             own_origin = f"{request.url.scheme}://{request.headers.get('host')}"
             if (origin is not None and origin != own_origin) or request.headers.get("sec-fetch-site") == "cross-site":
                 return error_response("request_origin", 403)
             length = request.headers.get("content-length")
-            if length and length.isdigit() and int(length) > FILE_LIMIT + 256_000:
-                return error_response("file_too_large", 413)
+            folder_upload = request.url.path.endswith("/materials/folder")
+            limit = FOLDER_LIMIT + 4 * 1024 * 1024 if folder_upload else FILE_LIMIT + 256_000
+            if length and length.isdigit() and int(length) > limit:
+                return error_response("folder_too_large" if folder_upload else "file_too_large", 413)
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         if request.url.path.startswith("/api/"):
@@ -194,6 +206,17 @@ def create_app(data_directory: Path | None = None, provider=None):
         finally:
             file.file.close()
 
+    @api.post("/courses/{course_id}/materials/folder", status_code=202)
+    def upload_folder(
+        course_id: ApiId, request: Request, files: Annotated[list[UploadFile], File()],
+        requestId: Annotated[ApiId, Form()],
+    ):
+        if not files or len(files) > 1000 or sum(file.size or 0 for file in files) > FOLDER_LIMIT:
+            raise AppError("folder_too_large", 413)
+        return service(request).import_folder(
+            course_id, [(file.filename or "", file.file) for file in files], requestId, FILE_LIMIT,
+        )
+
     @api.get("/courses/{course_id}/jobs/{job_id}")
     def get_job(course_id: ApiId, job_id: ApiId, request: Request):
         with service(request).store.connect() as db:
@@ -217,10 +240,13 @@ def create_app(data_directory: Path | None = None, provider=None):
             ).fetchone()
             if not page:
                 raise AppError("not_found", 404)
+        is_pdf = material["filename"].lower().endswith(".pdf")
+        base = f"/api/v1/courses/{course_id}/materials/{material_id}"
         return {
             "materialId": material_id, "page": number, "filename": material["filename"],
             "text": page["text"], "status": page["status"],
-            "url": f"/api/v1/courses/{course_id}/materials/{material_id}/pdf#page={number}",
+            "url": f"{base}/pdf#page={number}" if is_pdf else f"{base}/original",
+            "isPdf": is_pdf,
         }
 
     @api.get("/courses/{course_id}/materials/{material_id}/pdf")
@@ -228,9 +254,19 @@ def create_app(data_directory: Path | None = None, provider=None):
         tutor = service(request)
         with tutor.store.connect() as db:
             material = lookup(db, "materials", material_id, course_id)
-        if not (file := tutor.store.material_file(material_id)).is_file():
+        if not material["filename"].lower().endswith(".pdf") or not (file := tutor.store.material_file(material_id)).is_file():
             raise AppError("not_found", 404)
-        return FileResponse(file, media_type="application/pdf", filename=material["filename"], content_disposition_type="inline")
+        return FileResponse(file, media_type="application/pdf", filename=material["filename"].rsplit("/", 1)[-1],
+                            content_disposition_type="inline")
+
+    @api.get("/courses/{course_id}/materials/{material_id}/original")
+    def download_original(course_id: ApiId, material_id: ApiId, request: Request):
+        tutor = service(request)
+        with tutor.store.connect() as db:
+            material = lookup(db, "materials", material_id, course_id)
+        if not (file := tutor.store.material_file(material_id, material["filename"])).is_file():
+            raise AppError("not_found", 404)
+        return FileResponse(file, media_type="application/octet-stream", filename=material["filename"].rsplit("/", 1)[-1])
 
     @api.get("/courses/{course_id}/sessions")
     def sessions(course_id: ApiId, request: Request):
@@ -273,13 +309,21 @@ def create_app(data_directory: Path | None = None, provider=None):
     def review(course_id: ApiId, request: Request):
         return views(request).review(course_id)
 
+    @api.post("/courses/{course_id}/topics/{topic_id}/guide", status_code=202)
+    def review_guide(course_id: ApiId, topic_id: ApiId, body: GuideInput, request: Request):
+        return service(request).request_guide(course_id, topic_id, body.outlineId)
+
     app.include_router(api)
     app.mount("/assets", StaticFiles(directory=FRONTEND / "assets", check_dir=False), name="assets")
 
     @app.get("/", include_in_schema=False)
     def index():
         file = FRONTEND / "index.html"
-        return FileResponse(file) if file.is_file() else error_response("frontend_not_built", 503)
+        headers = {"Content-Security-Policy": (
+            "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+            "object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+        )} if desktop_token else None
+        return FileResponse(file, headers=headers) if file.is_file() else error_response("frontend_not_built", 503)
 
     return app
 

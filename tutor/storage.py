@@ -41,6 +41,10 @@ CREATE TABLE IF NOT EXISTS outlines (
     material_ids TEXT NOT NULL,
     created TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS material_issues (
+    material_id TEXT PRIMARY KEY REFERENCES materials(id),
+    code TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS topics (
     id TEXT PRIMARY KEY,
     course_id TEXT NOT NULL REFERENCES courses(id),
@@ -172,5 +176,6 @@ class Store:
         finally:
             db.close()
 
-    def material_file(self, material_id: str) -> Path:
-        return self.files / f"{material_id}.pdf"
+    def material_file(self, material_id: str, filename: str = ".pdf") -> Path:
+        extension = "pdf" if filename.lower().endswith(".pdf") else "bin"
+        return self.files / f"{material_id}.{extension}"

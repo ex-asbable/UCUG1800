@@ -3,7 +3,7 @@ import katex from 'katex'
 import { AlertCircle, BookOpen, Check, ClipboardList, ExternalLink, FileText, LoaderCircle, X } from 'lucide-react'
 import type { Job, Locale, Ref, Source, Topic } from './api'
 import { pendingJob } from './api'
-import { explain, pageLabel, type Copy } from './copy'
+import { explain, unitLabel, type Copy } from './copy'
 
 export function Formula({ value, display = false }: { value: string; display?: boolean }) {
   try {
@@ -52,21 +52,24 @@ export function Modal({ title, children, close, closeLabel, className = '' }: {
   )
 }
 
-export function Sources({ refs, locale, open }: { refs: Ref[]; locale: Locale; open: (ref: Ref) => void }) {
+export function Sources({ refs, locale, open, materialName }: {
+  refs: Ref[]; locale: Locale; open: (ref: Ref) => void; materialName?: (ref: Ref) => string
+}) {
   return <div className="source-links">{refs.map((ref) =>
     <button key={ref.materialId + ':' + ref.page} className="source-link" onClick={() => open(ref)}>
-      <FileText size={14} /> {pageLabel(ref.page, locale)}
+      <FileText size={14} /> {unitLabel(ref.page, locale, materialName?.(ref))}
     </button>,
   )}</div>
 }
 
 export function SourceModal({ source, locale, t, close }: { source: Source; locale: Locale; t: Copy; close: () => void }) {
   return <Modal title={t.sourcePreview} close={close} closeLabel={t.close} className="source-modal">
-    <div className="source-meta"><FileText size={19} /> <strong>{source.filename}</strong><span>{pageLabel(source.page, locale)}</span></div>
+    <div className="source-meta"><FileText size={19} /> <strong>{source.filename}</strong><span>{unitLabel(source.page, locale, source.filename)}</span></div>
     <pre className="source-text">{source.text || t.unreadable}</pre>
     <div className="modal-footer">
-      <a className="button primary" href={source.url} target="_blank" rel="noopener noreferrer">
-        <ExternalLink size={17} /> {t.openPdf}
+      <a className="button primary" href={source.url} target={source.isPdf ? '_blank' : undefined}
+        rel={source.isPdf ? 'noopener noreferrer' : undefined} download={!source.isPdf}>
+        <ExternalLink size={17} /> {source.isPdf ? t.openPdf : t.downloadOriginal}
       </a>
     </div>
   </Modal>

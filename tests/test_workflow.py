@@ -9,6 +9,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib.error import HTTPError
 from uuid import uuid4
+from zipfile import ZipFile
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -52,6 +53,8 @@ class FixtureProvider:
 
     def __init__(self):
         self.questions = 0
+        self.outline_calls = 0
+        self.guide_calls = 0
         self.fail_evaluation = False
         self.invalid_citation = False
 
@@ -64,6 +67,7 @@ class FixtureProvider:
         pages = data.get("pages", [])
         sources = [{key: page[key] for key in ("materialId", "page")} for page in pages[:1]]
         if task in ("outline", "merge_outline"):
+            self.outline_calls += 1
             result = {"topics": [{
                 "key": "hypothesis_testing", "parentKey": None,
                 "title": "Hypothesis testing" if en else "假设检验",
@@ -71,6 +75,13 @@ class FixtureProvider:
                 "opening": "How would you begin?" if en else "你会从哪一步开始？",
                 "sources": sources if not self.invalid_citation else [{"materialId": "other", "page": 500}],
             }]}
+        elif task == "review_guide":
+            self.guide_calls += 1
+            heading = "Hypothesis testing" if en else "假设检验"
+            result = {
+                "markdown": f"# {heading}\n\n$$\np < \\alpha\n$$",
+                "sources": sources if not self.invalid_citation else [{"materialId": "other", "page": 500}],
+            }
         elif task == "select_topic":
             result = {"topicKey": "hypothesis_testing"}
         elif task == "dialogue":
@@ -294,6 +305,87 @@ class WorkflowTests(unittest.TestCase):
     def test_origin_is_local(self):
         response = self.client.post(BASE + "/courses", headers={"Origin": "https://example.invalid"}, json={"name": "x"})
         self.assertEqual(response.status_code, 403)
+
+    def test_folder_import_keeps_originals_and_builds_one_outline(self):
+        word_file = io.BytesIO()
+        with ZipFile(word_file, "w") as archive:
+            archive.writestr("word/document.xml", """
+                <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                  <w:body><w:p><w:r><w:t>Decision rules</w:t></w:r></w:p></w:body>
+                </w:document>
+            """)
+        slides = io.BytesIO()
+        with ZipFile(slides, "w") as archive:
+            archive.writestr("ppt/presentation.xml", """
+                <p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+                  xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+                  <p:sldIdLst><p:sldId id="256" r:id="rId1" /></p:sldIdLst>
+                </p:presentation>
+            """)
+            archive.writestr("ppt/_rels/presentation.xml.rels", """
+                <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+                  <Relationship Id="rId1" Target="slides/slide2.xml" />
+                </Relationships>
+            """)
+            archive.writestr("ppt/slides/slide2.xml", """
+                <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+                  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+                  <a:p><a:r><a:t>Type II error</a:t></a:r></a:p>
+                </p:sld>
+            """)
+        path = f"/courses/{self.course}/materials"
+        entries = [
+            ("files", ("week-1/sample.pdf", pdf_bytes("Compare p with alpha."))),
+            ("files", ("week-1/nested/lecture.docx", word_file.getvalue())),
+            ("files", ("week-1/nested/notes.md", b"# Review\n\nCompare $p$ with alpha.")),
+            ("files", ("week-1/slides.pptx", slides.getvalue())),
+            ("files", ("week-1/diagram.png", b"original-bytes")),
+            ("files", ("week-1/broken.pdf", b"corrupt PDF")),
+            ("files", ("week-1/../invalid.txt", b"invalid")),
+        ]
+
+        def upload_folder():
+            response = self.client.post(BASE + path + "/folder", data={"requestId": "folder"}, files=entries)
+            self.assertEqual(response.status_code, 202, response.text)
+            return response.json()
+
+        result = upload_folder()
+        self.assertEqual(upload_folder(), result)
+        self.assertEqual(result["issues"], [{"filename": "week-1/../invalid.txt", "code": "invalid_material_name"}])
+        self.wait(result["jobId"])
+        materials = self.call("GET", path)["materials"]
+        self.assertEqual([item["status"] for item in materials], ["ready", "ready", "ready", "ready", "attached", "attached"])
+        self.assertEqual(self.provider.outline_calls, 1)
+        for offset, text in ((1, "Decision rules"), (2, "# Review"), (3, "Type II error")):
+            unit = self.call("GET", path + f"/{materials[offset]['id']}/units/1")
+            self.assertIn(text, unit["text"])
+            self.assertFalse(unit["isPdf"])
+        original = self.client.get(BASE + path + f"/{materials[4]['id']}/original")
+        self.assertEqual(original.content, b"original-bytes")
+        self.assertIn("attachment", original.headers["content-disposition"])
+
+    def test_review_guide_retries_citations_and_reuses_version_and_locale(self):
+        uploaded = self.upload(pdf_bytes("Compare p with alpha."))
+        outline = self.wait(uploaded["jobId"])["result"]["outlineId"]
+        course_path = f"/courses/{self.course}"
+        topic = self.call("GET", course_path + "/topics")["topics"][0]
+        path = course_path + f"/topics/{topic['id']}/guide"
+        body = {"outlineId": outline}
+        self.provider.invalid_citation = True
+        job_id = self.call("POST", path, body)["jobId"]
+        self.assertEqual(self.wait(job_id, "failed")["error"], "invalid_citation")
+        self.provider.invalid_citation = False
+        self.call("POST", course_path + f"/jobs/{job_id}/retry")
+        result = self.wait(job_id)["result"]
+        self.assertIn("$$\np < \\alpha\n$$", result["markdown"])
+        self.assertEqual(result["sources"], [{"materialId": uploaded["materialId"], "page": 1}])
+        self.assertEqual(self.call("POST", path, body)["jobId"], job_id)
+        self.assertEqual(self.call("GET", course_path + "/sessions")["sessions"], [])
+        self.assertEqual(self.provider.guide_calls, 2)
+        self.call("PATCH", "/preferences", {"locale": "en"})
+        english = self.call("POST", path, body)["jobId"]
+        self.assertNotEqual(english, job_id)
+        self.assertIn("Hypothesis testing", self.wait(english)["result"]["markdown"])
 
     @unittest.skipUnless(os.getenv("AI_TUTOR_TEST_PDF"), "Set AI_TUTOR_TEST_PDF to the provided course PDF")
     def test_actual_course_pdf(self):

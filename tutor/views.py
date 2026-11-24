@@ -16,13 +16,17 @@ class Views:
         with self.store.connect() as db:
             course = lookup(db, "courses", course_id)
             materials = []
-            for row in db.execute("SELECT * FROM materials WHERE course_id = ? ORDER BY created", (course_id,)):
+            for row in db.execute(
+                """SELECT m.*, i.code AS issue FROM materials m LEFT JOIN material_issues i ON m.id = i.material_id
+                   WHERE m.course_id = ? ORDER BY m.created, m.rowid""", (course_id,),
+            ):
                 pages = db.execute(
                     "SELECT number, status FROM pages WHERE material_id = ? ORDER BY number", (row["id"],),
                 ).fetchall()
                 materials.append({
                     "id": row["id"], "filename": row["filename"], "status": row["status"],
                     "active": bool(row["active"]), "pageCount": len(pages),
+                    "issue": row["issue"],
                     "unreadablePages": [page["number"] for page in pages if page["status"] != "readable"],
                 })
             jobs = [

@@ -1,10 +1,34 @@
-# AI Tutor · UCUG1800
+# AI Tutor · UCUG1800 · v0.1.0
 
-AI Tutor 是在本机运行的单用户复习工具。上传一份课程 PDF 后，应用生成能打开原文的知识点目录。Tutor 根据学生的思路追问，再用一道无提示新题确认具体卡点。复习清单优先显示仍待复习的已确认卡点。
+AI Tutor 是在本机运行的单用户学习软件。导入课件后，应用会生成带原文出处的知识点目录。选择一个知识点即可开始对话辅导或生成复习讲解稿。通过无提示短题确认的卡点会进入复习清单。
 
-## 在 Windows 上启动
+## 安装 Windows 桌面版
 
-需要 Python 3.12 或更新版本、Node.js 20.19 或更新的 20.x 版本（也可以用 22.12 及之后的 LTS 版本），以及下方两种模型后端中的一种。在仓库根目录运行这些 PowerShell 命令。
+运行 Windows x64 安装包 `AI-Tutor-Setup-0.1.0-x64.exe`，安装后从开始菜单打开 **AI Tutor**。安装包自带界面和本机服务。生成目录、辅导和讲解稿仍需可用的模型后端。可以使用本机已经通过 ChatGPT 登录的 Codex CLI，或打开右上角的「模型设置」配置兼容 Responses API 的服务。
+
+### 导入和复习
+
+1. 创建或选择课程，点「导入文件夹」，选中存放课件的目录。应用递归导入子文件夹，保留相对路径和原件，然后更新知识点目录。也可以用「上传 PDF」补传单份课件。
+2. PDF、PPTX、DOCX、Markdown、TeX 和常见纯文本格式可提取正文。图片、扫描件和暂时无法读取的格式保留为可下载原件。每份文件上限为 30 MiB，每批上限为 1,000 份和 512 MiB。
+3. 在知识点页点击「复习」，AI 会直接生成含 Markdown 排版、TeX 公式和课件出处的讲解稿。点击「另存为 Markdown」选择本机保存位置。讲解稿按知识点、课件版本和语言保存，关闭软件后可以重新打开。
+
+### 从网页 MVP 迁移数据
+
+桌面版默认使用 `%APPDATA%\AI Tutor\data`。先关闭桌面版和旧版服务，再从旧版的 `.data`（或之前配置的 `AI_TUTOR_DATA_DIR`）复制完整数据目录到桌面版的数据位置。对于已有桌面数据，先备份，并选择一个版本的数据目录使用。也可以在启动桌面版前设置 `AI_TUTOR_DATA_DIR`，直接指定已有数据目录。课程、课件、会话、短题和卡点记录会沿用。
+
+### 构建安装包
+
+在 Windows x64 上准备 Python 3.12+、Node.js 22.12+ 和 PowerShell 7。在仓库根目录执行以下命令。生成的安装包位于 `dist/release/AI-Tutor-Setup-0.1.0-x64.exe`。
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r desktop/requirements.txt
+pwsh -NoProfile -File desktop/build.ps1
+```
+
+## 开发模式
+
+可通过浏览器运行开发版。需要 Python 3.12+ 和 Node.js 20.19+ 或 22.12+。在仓库根目录运行下面的命令。
 
 ```powershell
 python -m venv .venv
@@ -53,7 +77,7 @@ $env:AI_TUTOR_API_KEY = [System.Net.NetworkCredential]::new("", (Read-Host "API 
 | `AI_TUTOR_API_MODEL` | API 模式必填。使用后端账户可用的模型 ID |
 | `AI_TUTOR_API_REASONING_EFFORT` | API 的启动思考强度。留空时由 API 采用默认设置 |
 | `AI_TUTOR_API_BASE_URL` | 默认为 `https://api.openai.com/v1`。可填含版本前缀的基础地址，或以 `/responses` 结尾的完整接口地址 |
-| `AI_TUTOR_DATA_DIR` | 仓库根目录下的 `.data`。包含 SQLite 和原始 PDF，可改成本机其他目录 |
+| `AI_TUTOR_DATA_DIR` | 桌面版默认为 `%APPDATA%\AI Tutor\data`，开发版默认为仓库下的 `.data`。包含 SQLite 和课件原件 |
 | `AI_TUTOR_MODEL_TIMEOUT` | 单次模型请求默认等待 180 秒，支持 10 至 900 秒 |
 
 在 macOS 或 Linux 上可将上面的 `.\.venv\Scripts\python.exe` 换成 `./.venv/bin/python`，`npm.cmd` 换成 `npm`，并用 `export` 设置环境变量。应用按单进程运行，使用同一个数据目录时只启动一个服务实例。
@@ -73,11 +97,11 @@ $env:AI_TUTOR_API_KEY = [System.Net.NetworkCredential]::new("", (Read-Host "API 
 
 语言设置同时切换界面和 Tutor。首次查看另一种语言的已有内容时，模型会生成并缓存译文。引用原文、学生的输入、短题和选项 ID、提交结果及复习进度沿用同一份记录。
 
-### PDF 和判分范围
+### 课件和判分范围
 
-- 当前只接收 PDF。应用按页提取文字层，标记无可读正文的页，支持补传或替换。Word、PowerPoint 和 OCR 留到后续。课件有文字但公式或代码是图片时，Tutor 使用该页实际提取到的内容。
+- PDF 按物理页提取文字，PPTX 按幻灯片提取，DOCX 和纯文本按文本段落引用。扫描件和图片中的文字需要提前做 OCR。PDF 支持补传或替换。
 - 单选按选项 ID 判定。文字填空结合已知表达与评分要点。TeX 支持数字、分数、低次多项式和单变量一次等式。无法可靠核对的表达或证据不足的理由会保留为待确认。
-- 原始课件、会话、作答和复习记录存放在本机。目录生成会向选定的模型发送按页截取的文本。辅导、出题和判分会发送相关课件片段与所需作答上下文。
+- 原始课件、会话、作答和复习记录存放在本机。目录生成会向选定的模型发送截取的文本。讲解稿、辅导、出题和判分会发送相关课件片段及任务所需上下文。
 
 ## 开发与验收
 

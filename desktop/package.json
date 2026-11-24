@@ -1,0 +1,36 @@
+{
+  "name": "ai-tutor",
+  "productName": "AI Tutor",
+  "version": "0.1.0",
+  "description": "Local AI tutor and course review companion",
+  "author": "AI Tutor contributors",
+  "private": true,
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "package:win": "electron-builder --win nsis --x64 --publish never"
+  },
+  "devDependencies": {
+    "electron": "45.4.1",
+    "electron-builder": "26.18.0"
+  },
+  "build": {
+    "appId": "io.github.exasbable.aitutor",
+    "productName": "AI Tutor",
+    "artifactName": "AI-Tutor-Setup-${version}-${arch}.${ext}",
+    "directories": {
+      "output": "../dist/release"
+    },
+    "files": ["main.cjs", "preload.cjs", "icon.ico"],
+    "extraResources": [
+      { "from": "../dist/backend/ai-tutor-service", "to": "backend" }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "icon.ico"
+    },
+    "nsis": {
+      "deleteAppDataOnUninstall": false
+    }
+  }
+}

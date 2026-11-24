@@ -1,7 +1,12 @@
 import json
 import logging
 import re
+from pathlib import PurePosixPath
+from xml.etree.ElementTree import ParseError
+from zipfile import BadZipFile, ZipFile
 
+from defusedxml.common import DefusedXmlException
+from defusedxml.ElementTree import fromstring
 from pypdf import PdfReader
 
 from .contracts import Outline, Source, Topic
@@ -16,7 +21,7 @@ OUTLINE_BATCH = 95_000
 KEY = re.compile(r"[a-z][a-z0-9_]{1,63}\Z")
 TERMS = re.compile(r"[a-zA-Z0-9_]{2,}|[\u3400-\u9fff]")
 
-OUTLINE_RULES = """Create a course outline from the supplied PDF page text. Deduplicate recurring
+OUTLINE_RULES = """Create a course outline from the supplied course material excerpts. Deduplicate recurring
 agenda pages. Group topics by stated or inferred headings and preserve material order.
 Reuse existing English snake_case topic keys if the concept still matches. parentKey is
 null for top-level topics. For covered topics, use readable sources that actually support
@@ -49,6 +54,96 @@ def read_pdf(path) -> list[tuple[int, str, str]]:
         raise
     except Exception as error:
         raise ModelError("invalid_pdf") from error
+
+
+def read_material(path, filename):
+    if filename.lower().endswith(".pdf"):
+        return read_pdf(path)
+    suffix = PurePosixPath(filename).suffix.lower()
+    if suffix in {".docx", ".pptx"}:
+        return read_office(path, suffix)
+    if suffix in {".txt", ".md", ".markdown", ".tex", ".csv", ".tsv", ".rst", ".json", ".xml", ".log"}:
+        data = path.read_bytes()
+        try:
+            text = data.decode("utf-16" if data.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-8-sig")
+        except UnicodeError as error:
+            raise ModelError("invalid_text") from error
+        if "\x00" in text:
+            raise ModelError("invalid_text")
+        return text_sections(text)
+    raise ModelError("attachment_only")
+
+
+def text_sections(text):
+    sections = []
+    buffer = ""
+    for match in re.finditer(r"[^\n]*\n|[^\n]+\Z", text):
+        line = match[0]
+        if buffer and len(buffer) + len(line) > 6000:
+            sections.append(buffer)
+            buffer = ""
+        if len(line) > 6000:
+            if len(sections) + len(line) // 6000 > PAGE_LIMIT:
+                raise ModelError("too_many_sections")
+            sections.extend(line[start:start + 6000] for start in range(0, len(line), 6000))
+        else:
+            buffer += line
+        if len(sections) > PAGE_LIMIT:
+            raise ModelError("too_many_sections")
+    if buffer:
+        sections.append(buffer)
+    return numbered_sections(sections)
+
+
+def numbered_sections(sections):
+    if len(sections) > PAGE_LIMIT:
+        raise ModelError("too_many_sections")
+    result = []
+    for number, section in enumerate(sections, 1):
+        text = section.strip()[:PAGE_TEXT_LIMIT]
+        result.append((number, text, "readable" if text else "unreadable"))
+    return result
+
+
+def read_office(path, suffix):
+    word = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    slide = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
+    drawing = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+    relation = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+    budget = 64 * 1024 * 1024
+    try:
+        with ZipFile(path) as archive:
+            def xml(name):
+                nonlocal budget
+                size = archive.getinfo(name).file_size
+                budget -= size
+                if size > 6 * 1024 * 1024 or budget < 0:
+                    raise ModelError("too_many_sections")
+                return fromstring(archive.read(name))
+
+            if suffix == ".docx":
+                document = xml("word/document.xml")
+                paragraphs = ["".join(node.text or "" for node in paragraph.iter(word + "t"))
+                              for paragraph in document.iter(word + "p")]
+                return text_sections("\n".join(paragraphs))
+
+            presentation = xml("ppt/presentation.xml")
+            targets = {item.get("Id"): item.get("Target", "")
+                       for item in xml("ppt/_rels/presentation.xml.rels")}
+            slide_ids = list(presentation.iter(slide + "sldId"))
+            if len(slide_ids) > PAGE_LIMIT:
+                raise ModelError("too_many_sections")
+            sections = []
+            for identifier in slide_ids:
+                target = targets[identifier.get(relation + "id")].removeprefix("/ppt/").removeprefix("slides/")
+                if not re.fullmatch(r"slide\d+\.xml", target):
+                    raise ModelError("invalid_office")
+                root = xml("ppt/slides/" + target)
+                sections.append("\n".join("".join(node.text or "" for node in paragraph.iter(drawing + "t"))
+                                          for paragraph in root.iter(drawing + "p"))[:PAGE_TEXT_LIMIT])
+            return numbered_sections(sections)
+    except (BadZipFile, KeyError, ParseError, DefusedXmlException, OSError, RuntimeError, ValueError) as error:
+        raise ModelError("invalid_office") from error
 
 
 def outline_pages(db, outline_id: str) -> list[dict]:

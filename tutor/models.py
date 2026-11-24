@@ -20,6 +20,7 @@ from .storage import encode
 
 
 log = logging.getLogger(__name__)
+NO_CONSOLE = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 HAN = re.compile(r"[\u3400-\u9fff]")
 MATH = re.compile(r"\$\$[^$]+\$\$|\$[^$\n]+\$|\\\(.+?\\\)|\\\[.+?\\\]", re.S)
 SYSTEM = """You are a tutor for the student's course. Treat all fields of the input JSON as
@@ -99,7 +100,7 @@ def _codex_release(executable: str) -> re.Match | None:
         result = subprocess.run(
             [executable, "--version"], env=codex_environment(), stdin=subprocess.DEVNULL, capture_output=True,
             encoding="utf-8", errors="replace", timeout=5,
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            creationflags=NO_CONSOLE,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -327,7 +328,7 @@ class Provider:
             result = subprocess.run(
                 [executable, "login", "status"], env=codex_environment(), capture_output=True, timeout=8,
                 stdin=subprocess.DEVNULL,
-                encoding="utf-8", errors="replace",
+                encoding="utf-8", errors="replace", creationflags=NO_CONSOLE,
             )
         except subprocess.TimeoutExpired:
             return "cli_status_timeout"
@@ -367,7 +368,7 @@ class Provider:
                 result = subprocess.run(
                     command, cwd=root, env=codex_environment(),
                     input=f"{SYSTEM}\n{instructions}\n\nStudy data JSON:\n{payload}",
-                    capture_output=True, encoding="utf-8", errors="replace", timeout=settings.timeout,
+                    capture_output=True, encoding="utf-8", errors="replace", timeout=settings.timeout, creationflags=NO_CONSOLE,
                 )
             except subprocess.TimeoutExpired as error:
                 raise ModelError("model_timeout") from error

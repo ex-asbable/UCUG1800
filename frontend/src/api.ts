@@ -22,15 +22,18 @@ export type ModelEfforts = {
 export type ModelOption = ModelEfforts & { id: string; name: string; isDefault: boolean }
 export type Job = {
   jobId: string
-  kind: 'import' | 'start' | 'dialogue' | 'question' | 'evaluate'
+  kind: 'import' | 'folder' | 'start' | 'dialogue' | 'question' | 'evaluate' | 'guide'
   status: 'queued' | 'running' | 'ready' | 'failed'
   stage: 'queued' | 'parsing' | 'generating' | 'ready'
   error: string | null
 }
+export type ReviewGuide = { markdown: string; sources: Ref[] }
+export type ImportIssue = { filename: string; code: string }
 export type Material = {
   id: string
   filename: string
-  status: 'queued' | 'parsing' | 'generating' | 'ready' | 'failed' | 'superseded'
+  status: 'queued' | 'parsing' | 'generating' | 'ready' | 'failed' | 'superseded' | 'attached'
+  issue: string | null
   active: boolean
   pageCount: number
   unreadablePages: number[]
@@ -99,7 +102,17 @@ export type Check = {
   solution?: string
   sources?: Ref[]
 }
-export type Source = Ref & { filename: string; text: string; status: string; url: string }
+export type Source = Ref & { filename: string; text: string; status: string; url: string; isPdf: boolean }
+
+declare global {
+  interface Window {
+    tutorDesktop?: {
+      remembered: (key: string) => string | null
+      remember: (key: string, value: string | null) => void
+      saveMarkdown: (filename: string, markdown: string) => Promise<boolean>
+    }
+  }
+}
 
 export class ApiError extends Error {
   constructor(public code: string, public status: number) {
@@ -127,10 +140,15 @@ export const pendingJob = (job: Job) => job.status === 'queued' || job.status ==
 export const coursePath = (id: string) => '/courses/' + id
 
 export function remembered(key: string): string | null {
+  if (window.tutorDesktop) return window.tutorDesktop.remembered(key)
   return localStorage.getItem('tutor.' + key)
 }
 
 export function remember(key: string, value: string | null): void {
+  if (window.tutorDesktop) {
+    window.tutorDesktop.remember(key, value)
+    return
+  }
   if (value === null) localStorage.removeItem('tutor.' + key)
   else localStorage.setItem('tutor.' + key, value)
 }

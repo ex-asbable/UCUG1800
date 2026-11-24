@@ -3,11 +3,15 @@ import type { Locale } from './api'
 const en = {
   courses: 'My courses', newCourse: 'New course', courseName: 'Course name', coursePlaceholder: 'e.g. Applied Statistics',
   create: 'Create course', materials: 'Course materials', upload: 'Upload PDF', add: 'Add materials', outline: 'Topic outline',
+  importFolder: 'Import folder', importIssues: 'Some files could not be imported', attached: 'Original only',
+  downloadOriginal: 'Download original', section: 'Section', slide: 'Slide',
+  studyGuide: 'Review', studyGuideTitle: 'Review guide', writingGuide: 'Writing your review guide…',
+  saveMarkdown: 'Save as Markdown', markdownSaved: 'Markdown saved', markdownSaveError: 'Could not save the Markdown file.',
   review: 'Review list', sessions: 'Recent sessions', newQuestion: 'Ask a new question', ask: 'Ask Tutor',
   askPlaceholder: 'What would you like to work through?', reasonPlaceholder: 'Write your next step or ask a follow-up…',
   send: 'Send', me: 'You', tutor: 'AI Tutor', sources: 'Course sources', openPdf: 'Open original PDF',
   sourcePreview: 'Extracted text', page: 'Page', pages: 'pages', replace: 'Replace PDF', close: 'Close', cancel: 'Cancel',
-  ready: 'Ready', queued: 'Queued', parsing: 'Reading PDF…', generating: 'Generating…', failed: 'Failed', superseded: 'Previous version',
+  ready: 'Ready', queued: 'Queued', parsing: 'Reading materials…', generating: 'Generating…', failed: 'Failed', superseded: 'Previous version',
   active: 'In progress', loading: 'Loading Tutor content…', retry: 'Retry', noSource: 'Sources will appear here as you study.',
   check: 'Independent check', checkIntro: 'Try a fresh question on this topic without hints.', chooseFormat: 'Answer format',
   choice: 'Single choice', text: 'Text', tex: 'TeX', checkStart: 'Start check', confirm: 'Check this gap', reviewStart: 'Try again',
@@ -19,12 +23,12 @@ const en = {
   noReview: 'No confirmed gaps to review', noReviewDetail: 'Confirmed gaps appear here after an independent check.',
   missing: 'Missing material', missingDetail: 'The outline lists this topic. Add a readable PDF that covers it to begin.',
   prerequisite: 'Prerequisite explanation', noCourses: 'Create your first course', noCoursesDetail: 'Add a course and upload a PDF to make a study outline you can revisit.',
-  noMaterials: 'Upload your course PDF', noMaterialsDetail: 'Tutor will organize the readable pages into topics and link each topic to the source.',
+  noMaterials: 'Import course materials', noMaterialsDetail: 'Tutor organizes readable course materials into topics and links each topic to its sources.',
   noTopics: 'Preparing the topic outline', noTopicsDetail: 'The outline will appear once a PDF is ready.',
   chooseTopic: 'Choose a topic to begin', chooseTopicDetail: 'Start with the outline or bring a question from your course.',
   startTutoring: 'Start tutoring', unreadable: 'No readable text. Upload a copy with selectable text.',
   updatedTutoring: 'Start with updated materials',
-  basedOn: 'Based on your course PDF', language: 'Interface and Tutor language', runtime: 'Model backend',
+  basedOn: 'Based on your course materials', language: 'Interface and Tutor language', runtime: 'Model backend',
   runtimeSettings: 'Model settings', modelApi: 'Model API', modelId: 'Model ID', apiBaseUrl: 'API base URL', apiKey: 'API key',
   modelDefault: 'Use backend default', reasoningEffort: 'Reasoning effort',
   effortNone: 'None', effortMinimal: 'Minimal', effortLow: 'Low', effortMedium: 'Medium', effortHigh: 'High',
@@ -36,7 +40,7 @@ const en = {
   apiKeyConfigured: 'Leave blank to keep the key for the current URL',
   apiKeyLifetime: 'This setting lasts until the local service restarts. Entered keys are kept in service memory.',
   apply: 'Apply', applying: 'Applying…',
-  noMaterialsSide: 'No PDFs yet', reviewHelp: 'Ranked by confirmed gaps so you can pick up where you left off.',
+  noMaterialsSide: 'No materials yet', reviewHelp: 'Ranked by confirmed gaps so you can pick up where you left off.',
   activity: 'Activity', backToTutor: 'Back to Tutor', languageLoading: 'Loading the selected language…',
   validating: 'Checking the question…', quote: 'Evidence', filePrompt: 'Choose a PDF file', dismiss: 'Dismiss',
   emptyConversation: 'Describe how you would begin or where you got stuck.', loadingCourse: 'Loading your courses…',
@@ -45,11 +49,15 @@ const en = {
 const zh: Record<keyof typeof en, string> = {
   courses: '我的课程', newCourse: '新建课程', courseName: '课程名称', coursePlaceholder: '例如：应用统计',
   create: '创建课程', materials: '课程课件', upload: '上传 PDF', add: '补传课件', outline: '知识点目录',
+  importFolder: '导入文件夹', importIssues: '部分文件未能导入', attached: '已保存原件',
+  downloadOriginal: '下载原件', section: '段', slide: '张幻灯片',
+  studyGuide: '复习', studyGuideTitle: '复习讲解稿', writingGuide: '正在生成复习讲解稿…',
+  saveMarkdown: '另存为 Markdown', markdownSaved: '已保存 Markdown 文件', markdownSaveError: '无法保存 Markdown 文件。',
   review: '复习清单', sessions: '最近会话', newQuestion: '提一个新问题', ask: '向 Tutor 提问',
   askPlaceholder: '这门课里，你想弄懂什么？', reasonPlaceholder: '写下下一步，或提出一个追问…',
   send: '发送', me: '我', tutor: 'AI Tutor', sources: '课件依据', openPdf: '打开 PDF 原文',
   sourcePreview: '提取的原文', page: '页', pages: '页', replace: '替换 PDF', close: '关闭', cancel: '取消',
-  ready: '已分析', queued: '等待处理', parsing: '正在读取 PDF…', generating: '正在生成…', failed: '处理失败', superseded: '历史版本',
+  ready: '已分析', queued: '等待处理', parsing: '正在读取课件…', generating: '正在生成…', failed: '处理失败', superseded: '历史版本',
   active: '正在处理', loading: '正在加载辅导内容…', retry: '重试', noSource: '学习时，相关课件依据会显示在这里。',
   check: '无提示短题', checkIntro: '用一道同知识点的新题独立检查理解。', chooseFormat: '作答方式',
   choice: '单选', text: '文字填空', tex: 'TeX 填空', checkStart: '开始检查', confirm: '检查这个卡点', reviewStart: '开始复核',
@@ -61,7 +69,7 @@ const zh: Record<keyof typeof en, string> = {
   noReview: '暂无已确认的卡点', noReviewDetail: '通过无提示短题确认的卡点会显示在这里。',
   missing: '材料缺失', missingDetail: '课件目录列了这个主题。补传包含相应内容的可读 PDF 后即可开始。',
   prerequisite: '前置知识补充', noCourses: '创建你的第一门课程', noCoursesDetail: '创建课程并上传一份 PDF，开始整理可以随时回看的复习目录。',
-  noMaterials: '上传课程 PDF', noMaterialsDetail: 'Tutor 会把能读取的课件内容整理成知识点，并附上原文出处。',
+  noMaterials: '导入课程课件', noMaterialsDetail: 'Tutor 会把能读取的课件内容整理成知识点，并附上原文出处。',
   noTopics: '正在准备知识点目录', noTopicsDetail: '有课件处理完成后，目录会显示在这里。',
   chooseTopic: '选择一个知识点开始', chooseTopicDetail: '从课件目录开始，或提出这门课里自己的问题。',
   startTutoring: '开始辅导', unreadable: '没有可提取的正文，请补传可选中文字的版本。',
@@ -78,7 +86,7 @@ const zh: Record<keyof typeof en, string> = {
   apiKeyConfigured: '留空沿用当前地址的密钥',
   apiKeyLifetime: '设置在本次服务运行期间有效。输入的密钥仅保存在服务内存中。',
   apply: '应用', applying: '正在应用…',
-  noMaterialsSide: '尚无 PDF', reviewHelp: '按已确认的卡点排序，方便继续上次的复习。',
+  noMaterialsSide: '尚无课件', reviewHelp: '按已确认的卡点排序，方便继续上次的复习。',
   activity: '处理进度', backToTutor: '返回 Tutor', languageLoading: '正在加载所选语言的内容…',
   validating: '正在核对题目…', quote: '判断依据', filePrompt: '请选择 PDF 文件', dismiss: '关闭提示',
   emptyConversation: '先说说你打算怎么做，或具体卡在哪一步。', loadingCourse: '正在加载课程…',
@@ -98,7 +106,13 @@ const errors: Record<string, [string, string]> = {
   unsupported_format: ['请选择 PDF 文件。', 'Choose a PDF file.'],
   invalid_pdf: ['这个文件无法作为 PDF 读取。请上传可用的版本。', 'This could not be read as a PDF. Upload a readable copy.'],
   encrypted_pdf: ['请上传未加密的 PDF。', 'Upload an unencrypted PDF.'],
-  file_too_large: ['请上传不超过 30 MiB 的 PDF。', 'Upload a PDF of 30 MiB or less.'],
+  file_too_large: ['单份文件最多 30 MiB。', 'Each file can be at most 30 MiB.'],
+  folder_too_large: ['每批最多导入 1000 份文件、共 512 MiB，请拆成多个文件夹导入。', 'Import up to 1,000 files and 512 MiB per batch. Split this folder into smaller batches.'],
+  invalid_material_name: ['文件路径无效、过长或与本批重名。', 'The filename is invalid, too long, or duplicated in this batch.'],
+  attachment_only: ['此文件格式暂不参与目录和讲解生成。', 'Text extraction is unavailable for this file format.'],
+  invalid_office: ['无法提取 Office 文件的正文。', 'Could not extract text from this Office file.'],
+  invalid_text: ['无法读取文本。请另存为 UTF-8 或带 BOM 的 UTF-16 后再导入。', 'Save the text as UTF-8 or UTF-16 with a BOM and import it again.'],
+  too_many_sections: ['文件超出可提取范围，请拆分后再导入。', 'This document exceeds the extraction limit. Split it and import it again.'],
   too_many_pages: ['请将 PDF 拆成每份不超过 350 页后上传。', 'Split the PDF into files of at most 350 pages.'],
   no_readable_text: ['没有可提取的正文，请补传可选中文字的 PDF。', 'No readable text was found. Upload a PDF with selectable text.'],
   course_not_ready: ['先上传可读课件，待目录生成后开始。', 'Upload readable material and wait for the outline.'],
@@ -153,3 +167,10 @@ export function explain(code: string, locale: Locale) {
 }
 
 export const pageLabel = (page: number, locale: Locale) => locale === 'zh-Hans' ? `第 ${page} 页` : `Page ${page}`
+
+export function unitLabel(page: number, locale: Locale, filename = '') {
+  const extension = filename.split('.').pop()?.toLowerCase()
+  if (!filename || extension === 'pdf') return pageLabel(page, locale)
+  const unit = extension === 'pptx' ? copy(locale).slide : copy(locale).section
+  return locale === 'zh-Hans' ? `第 ${page} ${unit}` : `${unit} ${page}`
+}

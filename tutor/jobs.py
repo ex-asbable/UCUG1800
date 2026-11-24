@@ -19,7 +19,7 @@ class AppError(Exception):
 
 
 def lookup(db, table: str, identifier: str, course_id: str | None = None):
-    if table not in {"courses", "materials", "jobs", "sessions", "gaps", "checks"}:
+    if table not in {"courses", "materials", "outlines", "jobs", "sessions", "gaps", "checks"}:
         raise ValueError(table)
     row = db.execute(f"SELECT * FROM {table} WHERE id = ?", (identifier,)).fetchone()
     if not row or (course_id is not None and row["course_id"] != course_id):
@@ -129,3 +129,9 @@ class JobWorker:
             db.execute("UPDATE jobs SET status = 'failed', error = ? WHERE id = ?", (code, job.id))
             if job.kind == "import":
                 db.execute("UPDATE materials SET status = 'failed' WHERE id = ?", (job.payload["materialId"],))
+            elif job.kind == "folder":
+                db.execute(
+                    """UPDATE materials SET status = 'failed'
+                       WHERE id IN (SELECT value FROM json_each(?)) AND status IN ('queued', 'parsing', 'generating')""",
+                    (encode(job.payload["materialIds"]),),
+                )

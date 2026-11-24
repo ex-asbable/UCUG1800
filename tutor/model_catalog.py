@@ -11,7 +11,10 @@ from urllib.parse import quote
 from urllib.request import Request, build_opener
 
 from .contracts import ModelCatalogRequest, ModelEffortsRequest, RuntimeSettings
-from .models import API_REASONING_EFFORTS, CODEX_REASONING_EFFORTS, ModelError, NoRedirects, Provider, api_base_url, codex_environment
+from .models import (
+    API_REASONING_EFFORTS, CODEX_REASONING_EFFORTS, NO_CONSOLE, ModelError, NoRedirects, Provider,
+    api_base_url, codex_environment,
+)
 from .storage import encode
 
 
@@ -103,7 +106,7 @@ def _codex_models(provider: Provider):
     try:
         with tempfile.TemporaryDirectory(prefix="ai-tutor-models-") as directory, subprocess.Popen(
             command, cwd=directory, env=codex_environment(), stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, encoding="utf-8", errors="replace",
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, encoding="utf-8", errors="replace", creationflags=NO_CONSOLE,
         ) as process:
             try:
                 connection = _CodexCatalogProcess(process, monotonic() + min(20, provider.settings.timeout))

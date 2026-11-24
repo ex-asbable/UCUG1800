@@ -1,17 +1,18 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import {
-  AlertCircle, BookOpen, CheckCircle2, ChevronRight, ClipboardList, FileText, GraduationCap,
+  AlertCircle, BookOpen, CheckCircle2, ChevronRight, ClipboardList, FileText, FolderOpen, GraduationCap,
   History, Languages, LoaderCircle, MessageSquarePlus, Plus, Send, Settings2, Upload, X,
 } from 'lucide-react'
 import {
   api, ApiError, coursePath, pendingJob, remember, remembered, uid,
-  type Answer, type Catalog, type Check, type Course, type Format, type Gap, type Job, type Locale,
+  type Answer, type Catalog, type Check, type Course, type Format, type Gap, type ImportIssue, type Job, type Locale,
   type Ref, type ReviewGroup, type Runtime, type Session, type SessionItem, type Source, type Topic,
 } from './api'
-import { copy, explain, pageLabel } from './copy'
+import { copy, explain, unitLabel } from './copy'
 import { Empty, Jobs, MathText, Modal, SourceModal, Sources, TopicButton } from './components'
 import { IndependentCheck } from './IndependentCheck'
 import { ModelSettings } from './ModelSettings'
+import { ReviewGuide } from './ReviewGuide'
 
 type ViewData = {
   locale: Locale
@@ -22,6 +23,7 @@ type ViewData = {
 }
 type Task = { jobId: string }
 type InputModal = 'course' | 'question' | null
+const mib = 1024 * 1024
 
 function code(error: unknown): string {
   return error instanceof ApiError ? error.code : 'connection_error'
@@ -50,6 +52,8 @@ export function App() {
   const [explicitCheckId, setExplicitCheckId] = useState('')
   const [check, setCheck] = useState<Check | null>(null)
   const [source, setSource] = useState<Source | null>(null)
+  const [guide, setGuide] = useState<{ topic: Topic; outlineId: string } | null>(null)
+  const [folderIssues, setFolderIssues] = useState<{ courseId: string; files: ImportIssue[] } | null>(null)
   const [view, setView] = useState<'tutor' | 'review'>('tutor')
   const [version, setVersion] = useState(0)
   const [initialVersion, setInitialVersion] = useState(0)
@@ -62,6 +66,7 @@ export function App() {
   const [viewError, setViewError] = useState('')
   const [checkError, setCheckError] = useState('')
   const file = useRef<HTMLInputElement>(null)
+  const folder = useRef<HTMLInputElement>(null)
   const replacement = useRef<string | null>(null)
   const busyNow = useRef(false)
   const requests = useRef(new Map<string, string>())
@@ -308,6 +313,34 @@ export function App() {
     })
   }
 
+  function uploadFolder(files: FileList | null) {
+    if (!files?.length) return
+    const list = Array.from(files).sort((a, b) => a.webkitRelativePath.localeCompare(b.webkitRelativePath))
+    void act(async () => {
+      const problems: ImportIssue[] = []
+      const body = new FormData()
+      const selected = list.filter((item) => {
+        if (item.size <= 30 * mib) return true
+        problems.push({ filename: item.webkitRelativePath || item.name, code: 'file_too_large' })
+        return false
+      })
+      setFolderIssues({ courseId, files: problems })
+      if (!selected.length) return
+      if (selected.length > 1000 || selected.reduce((size, item) => size + item.size, 0) > 512 * mib) {
+        throw new ApiError('folder_too_large', 413)
+      }
+      const key = JSON.stringify(['folder', courseId, selected.map((item) =>
+        [item.webkitRelativePath || item.name, item.size, item.lastModified])])
+      for (const item of selected) body.append('files', item, item.webkitRelativePath || item.name)
+      const result = await once(key, (requestId) => {
+        body.set('requestId', requestId)
+        return api<{ jobId: string | null; issues: ImportIssue[] }>(coursePath(courseId) + '/materials/folder', 'POST', body)
+      })
+      setFolderIssues({ courseId, files: [...problems, ...result.issues] })
+      reload()
+    })
+  }
+
   function sendMessage(event: FormEvent) {
     event.preventDefault()
     const text = message.trim()
@@ -372,7 +405,9 @@ export function App() {
     })
   }
 
-  const importJobs = currentCatalog?.jobs.filter((job) => job.kind === 'import') ?? []
+  const importJobs = currentCatalog?.jobs.filter((job) => job.kind === 'import' || job.kind === 'folder') ?? []
+  const currentFolderIssues = folderIssues?.courseId === courseId ? folderIssues.files : []
+  const materialName = (ref: Ref) => currentCatalog?.materials.find((item) => item.id === ref.materialId)?.filename ?? ''
   const references = (currentSession?.messages.slice().reverse().find((item) => item.sources.length)?.sources ?? selectedTopic?.sources ?? [])
     .filter((ref, index, all) => all.findIndex((item) => item.materialId === ref.materialId && item.page === ref.page) === index)
   const sessionTitle = selectedTopic?.title ?? (currentSession ? t.newQuestion : '')
@@ -399,10 +434,15 @@ export function App() {
         {courseId && <button className="button primary header-upload" onClick={() => selectFile()} disabled={busy}>
           <Upload size={17} />{t.upload}
         </button>}
+        {courseId && <button className="button secondary header-upload" onClick={() => folder.current?.click()} disabled={busy}>
+          <FolderOpen size={17} />{t.importFolder}
+        </button>}
       </div>
     </header>
     <input ref={file} type="file" accept="application/pdf,.pdf" multiple hidden aria-label={t.filePrompt}
       onChange={(event) => { upload(event.target.files); event.target.value = '' }} />
+    <input ref={folder} type="file" hidden aria-label={t.importFolder} {...{ webkitdirectory: '' }}
+      onChange={(event) => { uploadFolder(event.target.files); event.target.value = '' }} />
 
     <div className={'app-body ' + (!courseId ? 'onboarding' : '')}>
       <aside className="sidebar" aria-label={t.courses}>
@@ -426,13 +466,23 @@ export function App() {
               <div className="material" key={item.id}>
                 <div className="material-row"><span className="file-icon"><FileText size={18} /></span>
                   <div><strong title={item.filename}>{item.filename}</strong>
-                    <small className={'material-status ' + item.status}>{t[item.status]}{item.pageCount ? ' · ' + item.pageCount + ' ' + t.pages : ''}</small>
+                    <small className={'material-status ' + item.status}>
+                      {t[item.status]}{item.pageCount ? ' · ' + item.pageCount + ' ' +
+                        (item.filename.toLowerCase().endsWith('.pdf') ? t.pages :
+                          item.filename.toLowerCase().endsWith('.pptx') ? t.slide : t.section) : ''}
+                    </small>
                   </div>
                 </div>
-                {item.active && <button className="text-button small" onClick={() => selectFile(item.id)}>{t.replace}</button>}
+                {item.issue && <p className="material-issue">{explain(item.issue, locale)}</p>}
+                {item.active && item.filename.toLowerCase().endsWith('.pdf') &&
+                  <button className="text-button small" onClick={() => selectFile(item.id)}>{t.replace}</button>}
+                {item.status === 'attached' || !item.filename.toLowerCase().endsWith('.pdf') ?
+                  <a className="text-button small" href={'/api/v1' + coursePath(courseId) + '/materials/' + item.id + '/original'}
+                    download>{t.downloadOriginal}</a> : null}
                 {!!item.unreadablePages.length && <details className="unreadable">
                   <summary>{t.unreadable}</summary>
-                  <Sources locale={locale} refs={item.unreadablePages.map((page) => ({ materialId: item.id, page }))} open={openSource} />
+                  <Sources locale={locale} refs={item.unreadablePages.map((page) => ({ materialId: item.id, page }))}
+                    open={openSource} materialName={materialName} />
                 </details>}
               </div>
             ))}
@@ -464,6 +514,12 @@ export function App() {
           {!courses && <button className="text-button" onClick={() => { setError(''); setInitialVersion((value) => value + 1) }}>{t.retry}</button>}
           <button className="icon-button" aria-label={t.dismiss} onClick={() => setError('')}><X size={17} /></button>
         </div>}
+        {!!currentFolderIssues.length && <details className="warning-banner import-issues" open>
+          <summary>{t.importIssues} ({currentFolderIssues.length})</summary>
+          <ul>{currentFolderIssues.map((issue, index) =>
+            <li key={index}>{issue.filename} · {explain(issue.code, locale)}</li>)}</ul>
+          <button className="text-button" onClick={() => setFolderIssues(null)}>{t.dismiss}</button>
+        </details>}
         {!!runtime?.error && <div className="warning-banner" role="status"><AlertCircle size={18} /><span>{explain(runtime.error, locale)}</span>
           <button className="text-button" onClick={() => setShowRuntimeSettings(true)}>{t.runtimeSettings}</button>
         </div>}
@@ -508,7 +564,10 @@ export function App() {
               currentCatalog.materials.length && importJobs.some(pendingJob)
                 ? <Empty title={t.noTopics} detail={t.noTopicsDetail} />
                 : <Empty title={t.noMaterials} detail={t.noMaterialsDetail}>
-                  <button className="button primary" onClick={() => selectFile()}><Upload size={17} />{t.upload}</button>
+                  <div className="topic-actions">
+                    <button className="button primary" onClick={() => selectFile()} disabled={busy}><Upload size={17} />{t.upload}</button>
+                    <button className="button secondary" onClick={() => folder.current?.click()} disabled={busy}><FolderOpen size={17} />{t.importFolder}</button>
+                  </div>
                 </Empty>
             ) : !selectedTopic && !sessionId ? (
               <Empty title={t.chooseTopic} detail={t.chooseTopicDetail}><button className="button secondary" onClick={() => openInput('question')}>
@@ -522,12 +581,17 @@ export function App() {
                   </> : <>
                     <span className="overview-label"><BookOpen size={17} />{selectedTopic.coverage === 'prerequisite' ? t.prerequisite : t.basedOn}</span>
                     <p><MathText>{selectedTopic.explanation}</MathText></p>
-                    {!sessionId && <button className="button primary" disabled={busy}
-                      onClick={() => void act(() => startSession(selectedTopic.id, null))}>{t.startTutoring}</button>}
-                    {currentSession && currentSession.outlineId !== currentCatalog.course.outlineId &&
-                      topics.some((topic) => topic.id === selectedTopic.id && topic.coverage !== 'missing') &&
-                      <button className="button secondary" disabled={busy}
-                        onClick={() => void act(() => startSession(selectedTopic.id, null))}>{t.updatedTutoring}</button>}
+                    <div className="topic-actions">
+                      {!sessionId && <button className="button primary" disabled={busy}
+                        onClick={() => void act(() => startSession(selectedTopic.id, null))}>{t.startTutoring}</button>}
+                      {currentSession && currentSession.outlineId !== currentCatalog.course.outlineId &&
+                        topics.some((topic) => topic.id === selectedTopic.id && topic.coverage !== 'missing') &&
+                        <button className="button secondary" disabled={busy}
+                          onClick={() => void act(() => startSession(selectedTopic.id, null))}>{t.updatedTutoring}</button>}
+                      <button className="button secondary" disabled={busy} onClick={() => setGuide({
+                        topic: selectedTopic, outlineId: (currentSession?.outlineId ?? currentCatalog.course.outlineId)!,
+                      })}><BookOpen size={17} />{t.studyGuide}</button>
+                    </div>
                   </>}
                 </section>}
                 {sessionId && <section className="panel conversation">
@@ -538,7 +602,7 @@ export function App() {
                         <div className="message-avatar">{item.role === 'tutor' ? <GraduationCap size={19} /> : t.me.slice(0, 1)}</div>
                         <div className="message-content"><strong>{item.role === 'tutor' ? t.tutor : t.me}</strong>
                           <div className="bubble"><MathText>{item.text}</MathText></div>
-                          {!!item.sources.length && <Sources refs={item.sources} locale={locale} open={openSource} />}
+                          {!!item.sources.length && <Sources refs={item.sources} locale={locale} open={openSource} materialName={materialName} />}
                         </div>
                       </article>)}
                       <div ref={sessionEnd} />
@@ -558,8 +622,8 @@ export function App() {
                 <section className="panel source-panel">
                   <div className="panel-heading"><FileText size={21} /><h2>{t.sources}</h2></div>
                   {references.length ? references.map((ref) => <button className="citation" key={ref.materialId + ':' + ref.page} onClick={() => openSource(ref)}>
-                    <span className="file-icon"><FileText size={17} /></span><span><strong>{currentCatalog.materials.find((item) => item.id === ref.materialId)?.filename ?? t.openPdf}</strong>
-                      <small>{pageLabel(ref.page, locale)}</small></span><ChevronRight size={17} />
+                    <span className="file-icon"><FileText size={17} /></span><span><strong>{materialName(ref) || t.downloadOriginal}</strong>
+                      <small>{unitLabel(ref.page, locale, materialName(ref))}</small></span><ChevronRight size={17} />
                   </button>) : <p className="muted">{t.noSource}</p>}
                 </section>
                 {sessionId && !locked && <section className="panel practice-panel">
@@ -602,7 +666,8 @@ export function App() {
       key={activeCheck.id} check={activeCheck} jobs={currentSession?.jobs.filter((job) => job.kind === 'evaluate') ?? []}
       locale={locale} t={t} busy={busy} error={error} setLanguage={(value) => void switchLanguage(value)}
       close={() => setExplicitCheckId('')} leave={() => leaveCheck(activeCheck.id)}
-      submit={(answer, reason) => submitAnswer(activeCheck.id, answer, reason)} openSource={openSource} retry={retry}
+      submit={(answer, reason) => submitAnswer(activeCheck.id, answer, reason)} openSource={openSource}
+      materialName={materialName} retry={retry}
     /> : <Modal title={t.check} close={!locked ? () => setExplicitCheckId('') : undefined} closeLabel={t.close}>
       {checkError ? <div className="warning-banner"><span>{explain(checkError, locale)}</span>
         <button className="text-button" onClick={reload}>{t.retry}</button>
@@ -616,6 +681,9 @@ export function App() {
         reload()
       }}
     />}
+    {guide && <ReviewGuide key={courseId + guide.outlineId + guide.topic.id + locale}
+      courseId={courseId} outlineId={guide.outlineId} topicId={guide.topic.id} title={guide.topic.title}
+      locale={locale} t={t} materialName={materialName} openSource={openSource} close={() => setGuide(null)} />}
     {source && <SourceModal source={source} locale={locale} t={t} close={() => setSource(null)} />}
   </div>
 }

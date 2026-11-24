@@ -1,15 +1,16 @@
 import hashlib
 import json
 import re
+from shutil import copyfileobj
 from threading import Lock
 from pathlib import PurePosixPath
 
-from .contracts import Dialogue, Evaluation, Hypothesis, Question, QuestionAudit, RuntimeSettings, TopicSelection
+from .contracts import Dialogue, Evaluation, Hypothesis, Question, QuestionAudit, ReviewGuide, RuntimeSettings, TopicSelection
 from .grading import UnsupportedMath, match_tex, normalize_text, tex_value
 from .jobs import AppError, Job, JobWorker, complete, create_job, find_job, lookup
 from .localization import Localizer
 from .materials import (
-    KEY, build_outline, outline_pages, publish_outline, read_pdf, readable_pages,
+    KEY, build_outline, outline_pages, publish_outline, read_material, readable_pages,
     select_pages, source_ids, topic_version, validate_sources,
 )
 from .models import ModelError, validate_language
@@ -49,6 +50,16 @@ contradictory or ambiguous evidence. In evidence quote an exact short substring 
 student's submission or return an empty string for insufficient evidence. The feedback
 should explain the decision in the requested locale. For a different specific gap,
 provide otherHypothesis supported by an exact substring of the student's submission."""
+
+GUIDE_RULES = """Write a self-contained review guide for the selected topic, with a
+title, the core idea, a method or derivation where useful, a fully worked example
+where appropriate, and common mistakes. Explain directly in the requested locale.
+Do not ask the student questions, request input, assign exercises, or include a quiz.
+Return plain Markdown with headings, paragraphs, lists and tables as appropriate.
+Use $...$ for inline TeX and standalone lines of $$ around display TeX. Do not wrap
+the guide in a code fence or include HTML, images, or external links. Ground the
+guide in the supplied course excerpts and include the supporting IDs in sources.
+Clearly distinguish any prerequisite explanation from claims stated in the excerpts."""
 
 
 class TutorService:
@@ -113,6 +124,73 @@ class TutorService:
             raise
         self.worker.notify()
         return material_id, job_id
+
+    def import_folder(self, course_id, files, request_id, file_limit):
+        issues = []
+        entries = []
+        names = set()
+        for raw_name, stream in files:
+            name = raw_name.replace("\\", "/")
+            parts = name.split("/")
+            if (len(name) > 1024 or len(parts[-1]) > 240 or any(part in ("", ".", "..") for part in parts)
+                    or any(ord(character) < 32 for character in name) or name in names):
+                issues.append({"filename": raw_name[:1024], "code": "invalid_material_name"})
+                continue
+            names.add(name)
+            if stream.seek(0, 2) > file_limit:
+                issues.append({"filename": name, "code": "file_too_large"})
+                continue
+            stream.seek(0)
+            digest = hashlib.file_digest(stream, "sha256").hexdigest()
+            stream.seek(0)
+            entries.append((name, digest, stream))
+
+        input_data = {"files": [[name, digest] for name, digest, _ in entries], "issues": issues}
+        targets = []
+        try:
+            with self.store.connect(write=True) as db:
+                lookup(db, "courses", course_id)
+                if old := find_job(db, course_id, "folder", request_id, input_data):
+                    return {"jobId": old["id"], "issues": issues}
+                if not entries:
+                    return {"jobId": None, "issues": issues}
+                material_ids = []
+                for name, digest, stream in entries:
+                    identifier = new_id()
+                    target = self.store.material_file(identifier, name)
+                    targets.append(target)
+                    with target.open("wb") as output:
+                        copyfileobj(stream, output, 1024 * 1024)
+                    db.execute(
+                        """INSERT INTO materials (id, course_id, filename, digest, status, created)
+                           VALUES (?, ?, ?, ?, 'queued', ?)""", (identifier, course_id, name, digest, now()),
+                    )
+                    material_ids.append(identifier)
+                job_id = create_job(db, "folder", course_id, request_id, self.locale(db),
+                                    {"input": input_data, "materialIds": material_ids})
+        except Exception:
+            for target in targets:
+                target.unlink(missing_ok=True)
+            raise
+        self.worker.notify()
+        return {"jobId": job_id, "issues": issues}
+
+    def request_guide(self, course_id, topic_id, outline_id):
+        input_data = {"outlineId": outline_id, "topicId": topic_id}
+        with self.store.connect(write=True) as db:
+            lookup(db, "outlines", outline_id, course_id)
+            topic = topic_version(db, outline_id, topic_id)
+            if not topic:
+                raise AppError("not_found", 404)
+            if json.loads(topic["content"])["coverage"] == "missing":
+                raise AppError("missing_material", 409)
+            locale = self.locale(db)
+            request_id = f"{outline_id}-{topic_id}-{locale}"
+            if old := find_job(db, course_id, "guide", request_id, input_data):
+                return {"jobId": old["id"]}
+            job_id = create_job(db, "guide", course_id, request_id, locale, {"input": input_data})
+        self.worker.notify()
+        return {"jobId": job_id}
 
     def start_session(self, course_id, topic_id, question, request_id):
         input_data = {"topicId": topic_id, "question": question}
@@ -278,11 +356,19 @@ class TutorService:
                     db.execute(
                         "UPDATE materials SET status = 'queued' WHERE id = ?", (payload["materialId"],),
                     )
+                elif row["kind"] == "folder":
+                    db.execute(
+                        """UPDATE materials SET status = 'queued'
+                           WHERE id IN (SELECT value FROM json_each(?)) AND status = 'failed'""",
+                        (encode(payload["materialIds"]),),
+                    )
         self.worker.notify()
 
     def run(self, job: Job):
-        if job.kind == "import":
+        if job.kind in ("import", "folder"):
             self.run_import(job)
+        elif job.kind == "guide":
+            self.run_guide(job)
         elif job.kind in ("start", "dialogue"):
             self.run_dialogue(job)
         elif job.kind == "question":
@@ -291,33 +377,33 @@ class TutorService:
             self.run_evaluation(job)
 
     def run_import(self, job: Job):
-        material_id = job.payload["materialId"]
+        is_folder = job.kind == "folder"
+        identifiers = job.payload["materialIds"] if is_folder else [job.payload["materialId"]]
         with self.store.connect(write=True) as db:
-            material = lookup(db, "materials", material_id, job.course)
-            if material["replaces_id"] and not lookup(db, "materials", material["replaces_id"], job.course)["active"]:
+            materials = [lookup(db, "materials", identifier, job.course) for identifier in identifiers]
+            replaces = materials[0]["replaces_id"]
+            if replaces and not lookup(db, "materials", replaces, job.course)["active"]:
                 raise AppError("stale_material", 409)
             db.execute("UPDATE jobs SET stage = 'parsing' WHERE id = ?", (job.id,))
-            db.execute("UPDATE materials SET status = 'parsing' WHERE id = ?", (material_id,))
-            parsed = db.execute("SELECT count(*) FROM pages WHERE material_id = ?", (material_id,)).fetchone()[0]
-        if not parsed:
-            pages = read_pdf(self.store.material_file(material_id))
-            with self.store.connect(write=True) as db:
-                db.executemany("INSERT INTO pages VALUES (?, ?, ?, ?)", [(material_id, *page) for page in pages])
+        indexed = [material["id"] for material in materials
+                   if material["status"] != "attached" and self.parse_material(material, is_folder)]
         with self.store.connect(write=True) as db:
-            if not readable_pages(db, [material_id]):
-                raise AppError("no_readable_text", 422)
-            db.execute("UPDATE jobs SET stage = 'generating' WHERE id = ?", (job.id,))
-            db.execute("UPDATE materials SET status = 'generating' WHERE id = ?", (material_id,))
             course = lookup(db, "courses", job.course)
+            outcome = {"materialIds": identifiers} if is_folder else {"materialId": identifiers[0]}
+            if not indexed:
+                complete(db, job, {**outcome, "outlineId": course["outline_id"]})
+                return
+            db.execute("UPDATE jobs SET stage = 'generating' WHERE id = ?", (job.id,))
+            db.executemany("UPDATE materials SET status = 'generating' WHERE id = ?", [(identifier,) for identifier in indexed])
             active = [
                 row["id"] for row in db.execute(
-                    "SELECT id FROM materials WHERE course_id = ? AND active = 1 ORDER BY created", (job.course,),
+                    "SELECT id FROM materials WHERE course_id = ? AND active = 1 ORDER BY created, rowid", (job.course,),
                 )
             ]
-            if material["replaces_id"]:
-                active[active.index(material["replaces_id"])] = material_id
+            if replaces:
+                active[active.index(replaces)] = indexed[0]
             else:
-                active.append(material_id)
+                active.extend(indexed)
             pages = readable_pages(db, active)
             old_topics = [
                 {"key": row["key"], "title": json.loads(row["content"])["title"]}
@@ -328,11 +414,59 @@ class TutorService:
             ]
         topics = build_outline(self.provider, name=course["name"], pages=pages, old_topics=old_topics, locale=job.locale)
         with self.store.connect(write=True) as db:
-            if material["replaces_id"]:
-                db.execute("UPDATE materials SET active = 0, status = 'superseded' WHERE id = ?", (material["replaces_id"],))
-            db.execute("UPDATE materials SET active = 1, status = 'ready' WHERE id = ?", (material_id,))
+            if replaces:
+                db.execute("UPDATE materials SET active = 0, status = 'superseded' WHERE id = ?", (replaces,))
+            db.executemany("UPDATE materials SET active = 1, status = 'ready' WHERE id = ?", [(identifier,) for identifier in indexed])
             outline_id = publish_outline(db, job.course, active, topics, job.locale)
-            complete(db, job, {"materialId": material_id, "outlineId": outline_id})
+            complete(db, job, {**outcome, "outlineId": outline_id})
+
+    def parse_material(self, material, allow_attachment):
+        material_id = material["id"]
+        filename = material["filename"]
+        with self.store.connect(write=True) as db:
+            db.execute("UPDATE materials SET status = 'parsing' WHERE id = ?", (material_id,))
+            parsed = db.execute("SELECT count(*) FROM pages WHERE material_id = ?", (material_id,)).fetchone()[0]
+        try:
+            if not parsed:
+                pages = read_material(self.store.material_file(material_id, filename), filename)
+                with self.store.connect(write=True) as db:
+                    db.executemany("INSERT INTO pages VALUES (?, ?, ?, ?)", [(material_id, *page) for page in pages])
+            with self.store.connect() as db:
+                if not db.execute(
+                    "SELECT 1 FROM pages WHERE material_id = ? AND status = 'readable' LIMIT 1", (material_id,),
+                ).fetchone():
+                    raise ModelError("no_readable_text")
+        except ModelError as error:
+            if not allow_attachment:
+                raise
+            with self.store.connect(write=True) as db:
+                db.execute("INSERT OR REPLACE INTO material_issues VALUES (?, ?)", (material_id, error.code))
+                db.execute("UPDATE materials SET status = 'attached' WHERE id = ?", (material_id,))
+            return False
+        return True
+
+    def run_guide(self, job: Job):
+        outline_id = job.payload["input"]["outlineId"]
+        topic_id = job.payload["input"]["topicId"]
+        with self.store.connect() as db:
+            course = lookup(db, "courses", job.course)
+            topic = topic_version(db, outline_id, topic_id)
+            content = json.loads(topic["content"])
+            pages = select_pages(outline_pages(db, outline_id),
+                                 f"{content['title']} {content['explanation']}", content["sources"])
+        guide = self.provider.generate(
+            "review_guide", GUIDE_RULES,
+            {"locale": job.locale, "course": course["name"], "topic": content["title"],
+             "coverage": content["coverage"], "pages": pages}, ReviewGuide,
+        )
+        markdown = guide.markdown.strip()
+        if not markdown or len(markdown) > 24000:
+            raise ModelError("invalid_model_output")
+        validate_language([markdown], job.locale)
+        validate_sources(guide.sources, source_ids(pages), required=True)
+        with self.store.connect(write=True) as db:
+            sources = list({(source.materialId, source.page): source.model_dump() for source in guide.sources}.values())
+            complete(db, job, {"markdown": markdown, "sources": sources})
 
     def conversation_context(self, db, session, query):
         topic = topic_version(db, session["outline_id"], session["topic_id"])
