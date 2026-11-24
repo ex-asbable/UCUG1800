@@ -4,6 +4,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, StringConstraints
 
 
 Locale = Literal["zh-Hans", "en"]
+ChapterMode = Literal["knowledge", "file"]
 QuestionFormat = Literal["choice", "text", "tex"]
 ApiReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
 CodexReasoningEffort = Literal[ApiReasoningEffort, "ultra"]

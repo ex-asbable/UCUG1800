@@ -182,10 +182,12 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(response.status_code, status, response.text)
         return response.json()
 
-    def upload(self, contents, request_id=None, replaces=None):
+    def upload(self, contents, request_id=None, replaces=None, chapter_mode=None):
         data = {"requestId": request_id or uuid4().hex}
         if replaces:
             data["replacesId"] = replaces
+        if chapter_mode:
+            data["chapterMode"] = chapter_mode
         result = self.client.post(BASE + f"/courses/{self.course}/materials", data=data,
                                   files={"file": ("Hypothesis.pdf", contents, "application/pdf")})
         self.assertEqual(result.status_code, 202, result.text)
@@ -243,6 +245,46 @@ class WorkflowTests(unittest.TestCase):
         failed = self.upload(pdf_bytes("Invalid generated citation."))
         self.assertEqual(self.wait(failed["jobId"], "failed")["error"], "invalid_citation")
         self.assertEqual(self.call("GET", path + "/topics")["topics"][0]["sources"][0]["materialId"], replaced["materialId"])
+
+    def test_file_chapters_cover_each_readable_file_and_keep_history_when_switching(self):
+        path = f"/courses/{self.course}"
+        original, knowledge_topic = self.prepare()
+        files = [
+            ("files", ("course/one/notes.md", b"First lesson", "text/markdown")),
+            ("files", ("course/two/notes.md", b"Second lesson", "text/markdown")),
+            ("files", ("course/attachment.bin", b"Attachment", "application/octet-stream")),
+        ]
+        request = {"requestId": "file-chapters", "chapterMode": "file"}
+        folder = self.client.post(BASE + path + "/materials/folder", data=request, files=files)
+        self.assertEqual(folder.status_code, 202, folder.text)
+        duplicate = self.client.post(BASE + path + "/materials/folder", data=request, files=files)
+        self.assertEqual(duplicate.json(), folder.json())
+        conflict = self.client.post(BASE + path + "/materials/folder",
+                                    data={**request, "chapterMode": "knowledge"}, files=files)
+        self.assertEqual(conflict.status_code, 409, conflict.text)
+        folder_result = self.wait(folder.json()["jobId"])["result"]
+        first_note, second_note, _ = folder_result["materialIds"]
+        topics = self.call("GET", path + "/topics")["topics"]
+        self.assertEqual([(topic["title"], topic["parentId"], topic["materialId"]) for topic in topics], [
+            ("Hypothesis.pdf", None, original["materialId"]),
+            ("course/one/notes.md", None, first_note),
+            ("course/two/notes.md", None, second_note),
+        ])
+        self.assertEqual(self.provider.outline_calls, 1)
+        guide = self.call("POST", path + f"/topics/{topics[2]['id']}/guide",
+                          {"outlineId": folder_result["outlineId"]})
+        self.assertEqual(self.wait(guide["jobId"])["result"]["sources"], [{"materialId": second_note, "page": 1}])
+        session = self.open_session(topics[0])
+        replacement = self.upload(pdf_bytes("Updated material."), replaces=original["materialId"], chapter_mode="file")
+        self.wait(replacement["jobId"])
+        updated = self.call("GET", path + "/topics")["topics"]
+        self.assertEqual([topic["id"] for topic in updated], [topic["id"] for topic in topics])
+        self.assertEqual(updated[0]["materialId"], replacement["materialId"])
+
+        added = self.upload(pdf_bytes("Additional material."), chapter_mode="knowledge")
+        self.wait(added["jobId"])
+        self.assertEqual(self.call("GET", path + "/topics")["topics"][0]["id"], knowledge_topic["id"])
+        self.assertEqual(self.call("GET", session)["topic"]["materialId"], original["materialId"])
 
     def test_independent_check_retry_language_and_review(self):
         _, topic = self.prepare()

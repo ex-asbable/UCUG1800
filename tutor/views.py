@@ -80,7 +80,8 @@ class Views:
         }
         if status:
             topic["status"] = status
-        translations.extend((topic, key, row["locale"]) for key in ("title", "explanation", "opening"))
+        fields = ("explanation", "opening") if "materialId" in topic else ("title", "explanation", "opening")
+        translations.extend((topic, key, row["locale"]) for key in fields)
         return topic
 
     def sessions(self, course_id):
@@ -93,8 +94,10 @@ class Views:
                 item = {"id": row["id"], "topicId": row["topic_id"], "updated": row["updated"], "title": None}
                 topic = topic_version(db, row["outline_id"], row["topic_id"])
                 if topic:
-                    item["title"] = json.loads(topic["content"])["title"]
-                    translations.append((item, "title", topic["locale"]))
+                    content = json.loads(topic["content"])
+                    item["title"] = content["title"]
+                    if "materialId" not in content:
+                        translations.append((item, "title", topic["locale"]))
                 else:
                     message = db.execute(
                         "SELECT text FROM messages WHERE session_id = ? AND role = 'student' ORDER BY seq LIMIT 1", (row["id"],),

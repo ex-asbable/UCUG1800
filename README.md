@@ -1,10 +1,10 @@
-# AI Tutor · UCUG1800 · v0.1.0
+# AI Tutor · UCUG1800 · v0.1.1
 
-AI Tutor 是在本机运行的单用户学习软件。导入课件后，应用会生成带原文出处的知识点目录。选择一个知识点即可开始对话辅导或生成复习讲解稿。通过无提示短题确认的卡点会进入复习清单。
+AI Tutor 是在本机运行的单用户学习软件。导入课件后，应用会生成带原文出处的课程目录。选择一个章节即可开始对话辅导或生成复习讲解稿。通过无提示短题确认的卡点会进入复习清单。
 
 ## 安装 Windows 桌面版
 
-从 [GitHub Release](https://github.com/ex-asbable/UCUG1800/releases/tag/v0.1.0) 下载并运行 Windows x64 安装包 `AI-Tutor-Setup-0.1.0-x64.exe`，安装后从开始菜单打开 **AI Tutor**。安装包自带界面和本机服务。生成目录、辅导和讲解稿仍需可用的模型后端。可以使用本机已经通过 ChatGPT 登录的 Codex CLI，或打开右上角的「模型设置」配置兼容 Responses API 的服务。
+从 [GitHub Release](https://github.com/ex-asbable/UCUG1800/releases/tag/v0.1.1) 下载并运行 Windows x64 安装包 `AI-Tutor-Setup-0.1.1-x64.exe`，安装后从开始菜单打开 **AI Tutor**。安装包自带界面和本机服务。按知识点生成目录、分析课件图片、辅导和生成讲解稿需要可用的模型后端。可以使用本机已经通过 ChatGPT 登录的 Codex CLI，或打开右上角的「模型设置」配置兼容 Responses API 的服务。
 
 ### 软件更新
 
@@ -12,7 +12,7 @@ Windows x64 桌面版启动后会检查 GitHub 上的新正式版本，运行期
 
 ### 导入和复习
 
-1. 创建或选择课程，点「导入文件夹」，选中存放课件的目录。应用递归导入子文件夹，保留相对路径和原件，然后更新知识点目录。也可以用「上传 PDF」补传单份课件。
+1. 创建或选择课程，点「导入文件夹」或「上传 PDF」，然后选「按知识点」或「每份文件一章」。默认按知识点划分。导入成功后，应用按所选方式重新整理课程目录，并为这门课记住选择。按文件划分时，每份可读课件用文件名或相对路径作为章节标题。导入文件夹会递归读取子文件夹并保留原件。
 2. PDF、PPTX、DOCX、Markdown、TeX 和常见纯文本格式可提取正文。AI 可分析 PDF 中的图片、矢量图和扫描页，PPTX 与 DOCX 内嵌的常见位图，以及通过文件夹导入的 PNG、JPEG、WebP、GIF、BMP 和 TIFF。处理这些课件时，课件列表会显示「需要多模态模型」。如果当前模型不支持图片输入，请在「模型设置」切换模型，再从「处理进度」重试。每份文件上限为 30 MiB，每批上限为 1,000 份和 512 MiB。
 3. 在知识点页点击「复习」，AI 会直接生成含 Markdown 排版、TeX 公式和课件出处的讲解稿。点击「另存为 Markdown」选择本机保存位置。讲解稿按知识点、课件版本和语言保存，关闭软件后可以重新打开。
 
@@ -22,7 +22,7 @@ Windows x64 桌面版启动后会检查 GitHub 上的新正式版本，运行期
 
 ### 构建安装包
 
-在 Windows x64 上准备 Python 3.12+、Node.js 22.12+ 和 PowerShell 7。在仓库根目录执行以下命令。生成的安装包位于 `dist/release/AI-Tutor-Setup-0.1.0-x64.exe`。
+在 Windows x64 上准备 Python 3.12+、Node.js 22.12+ 和 PowerShell 7。在仓库根目录执行以下命令。生成的安装包位于 `dist/release/AI-Tutor-Setup-0.1.1-x64.exe`。
 
 ```powershell
 python -m venv .venv

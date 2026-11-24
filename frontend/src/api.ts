@@ -1,4 +1,5 @@
 export type Locale = 'zh-Hans' | 'en'
+export type ChapterMode = 'knowledge' | 'file'
 export type Format = 'choice' | 'text' | 'tex'
 export type GapStatus = 'unassessed' | 'pending' | 'review_needed' | 'resolved' | 'not_confirmed'
 export type Ref = { materialId: string; page: number }
@@ -42,6 +43,7 @@ export type Material = {
 export type Catalog = { course: Course; materials: Material[]; jobs: Job[] }
 export type Topic = {
   id: string
+  materialId?: string
   parentId: string | null
   position: number
   title: string

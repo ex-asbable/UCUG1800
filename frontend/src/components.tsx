@@ -114,7 +114,7 @@ export function TopicButton({ topic, current, t, level, select }: {
     aria-current={current ? 'true' : undefined} onClick={select}
   >
     {topic.status === 'resolved' ? <Check size={17} /> : <BookOpen size={17} />}
-    <span><MathText>{topic.title}</MathText></span>
+    <span>{topic.materialId ? topic.title : <MathText>{topic.title}</MathText>}</span>
     {state && <small className={'badge' + (warning ? ' warning' : '')}>{state}</small>}
   </button>
 }

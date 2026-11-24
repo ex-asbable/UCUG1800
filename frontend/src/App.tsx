@@ -5,7 +5,7 @@ import {
 } from 'lucide-react'
 import {
   api, ApiError, coursePath, pendingJob, remember, remembered, uid,
-  type Answer, type Catalog, type Check, type Course, type Format, type Gap, type ImportIssue, type Job, type Locale,
+  type Answer, type Catalog, type ChapterMode, type Check, type Course, type Format, type Gap, type ImportIssue, type Job, type Locale,
   type Ref, type ReviewGroup, type Runtime, type Session, type SessionItem, type Source, type Topic,
 } from './api'
 import { copy, explain, unitLabel } from './copy'
@@ -24,6 +24,7 @@ type ViewData = {
 }
 type Task = { jobId: string }
 type InputModal = 'course' | 'question' | null
+type ImportPicker = { kind: 'pdf'; replaces: string | null } | { kind: 'folder' }
 const mib = 1024 * 1024
 
 function code(error: unknown): string {
@@ -55,6 +56,8 @@ export function App() {
   const [source, setSource] = useState<Source | null>(null)
   const [guide, setGuide] = useState<{ topic: Topic; outlineId: string } | null>(null)
   const [folderIssues, setFolderIssues] = useState<{ courseId: string; files: ImportIssue[] } | null>(null)
+  const [importPicker, setImportPicker] = useState<ImportPicker | null>(null)
+  const [chapterMode, setChapterMode] = useState<ChapterMode>('knowledge')
   const [view, setView] = useState<'tutor' | 'review'>('tutor')
   const [version, setVersion] = useState(0)
   const [initialVersion, setInitialVersion] = useState(0)
@@ -66,9 +69,7 @@ export function App() {
   const [error, setError] = useState('')
   const [viewError, setViewError] = useState('')
   const [checkError, setCheckError] = useState('')
-  const file = useRef<HTMLInputElement>(null)
-  const folder = useRef<HTMLInputElement>(null)
-  const replacement = useRef<string | null>(null)
+  const importInput = useRef<HTMLInputElement>(null)
   const busyNow = useRef(false)
   const requests = useRef(new Map<string, string>())
   const sessionEnd = useRef<HTMLDivElement>(null)
@@ -108,6 +109,7 @@ export function App() {
 
   function selectCourse(id: string) {
     setCourseId(id)
+    setChapterMode(id && remembered('chapterMode.' + id) === 'file' ? 'file' : 'knowledge')
     setTopicId('')
     setView('tutor')
     selectSession(id ? remembered('session.' + id) ?? '' : '', id)
@@ -290,22 +292,24 @@ export function App() {
   }
 
   function selectFile(replaces: string | null = null) {
-    replacement.current = replaces
-    file.current?.click()
+    setImportPicker({ kind: 'pdf', replaces })
   }
 
-  function upload(files: FileList | null) {
+  function selectFolder() {
+    setImportPicker({ kind: 'folder' })
+  }
+
+  function upload(files: FileList | null, replaces: string | null) {
     if (!files?.length) return
     const list = Array.from(files)
-    const replaces = replacement.current
-    replacement.current = null
     void act(async () => {
       for (const item of replaces ? list.slice(0, 1) : list) {
-        const key = JSON.stringify([courseId, replaces, item.name, item.size, item.lastModified])
+        const key = JSON.stringify([courseId, replaces, chapterMode, item.name, item.size, item.lastModified])
         await once(key, (requestId) => {
           const body = new FormData()
           body.append('file', item)
           body.append('requestId', requestId)
+          body.append('chapterMode', chapterMode)
           if (replaces) body.append('replacesId', replaces)
           return api(coursePath(courseId) + '/materials', 'POST', body)
         })
@@ -330,11 +334,12 @@ export function App() {
       if (selected.length > 1000 || selected.reduce((size, item) => size + item.size, 0) > 512 * mib) {
         throw new ApiError('folder_too_large', 413)
       }
-      const key = JSON.stringify(['folder', courseId, selected.map((item) =>
+      const key = JSON.stringify(['folder', courseId, chapterMode, selected.map((item) =>
         [item.webkitRelativePath || item.name, item.size, item.lastModified])])
       for (const item of selected) body.append('files', item, item.webkitRelativePath || item.name)
       const result = await once(key, (requestId) => {
         body.set('requestId', requestId)
+        body.set('chapterMode', chapterMode)
         return api<{ jobId: string | null; issues: ImportIssue[] }>(coursePath(courseId) + '/materials/folder', 'POST', body)
       })
       setFolderIssues({ courseId, files: [...problems, ...result.issues] })
@@ -436,15 +441,11 @@ export function App() {
         {courseId && <button className="button primary header-upload" onClick={() => selectFile()} disabled={busy}>
           <Upload size={17} />{t.upload}
         </button>}
-        {courseId && <button className="button secondary header-upload" onClick={() => folder.current?.click()} disabled={busy}>
+        {courseId && <button className="button secondary header-upload" onClick={selectFolder} disabled={busy}>
           <FolderOpen size={17} />{t.importFolder}
         </button>}
       </div>
     </header>
-    <input ref={file} type="file" accept="application/pdf,.pdf" multiple hidden aria-label={t.filePrompt}
-      onChange={(event) => { upload(event.target.files); event.target.value = '' }} />
-    <input ref={folder} type="file" hidden aria-label={t.importFolder} {...{ webkitdirectory: '' }}
-      onChange={(event) => { uploadFolder(event.target.files); event.target.value = '' }} />
 
     <div className={'app-body ' + (!courseId ? 'onboarding' : '')}>
       <aside className="sidebar" aria-label={t.courses}>
@@ -565,7 +566,7 @@ export function App() {
                 : <Empty title={t.noMaterials} detail={t.noMaterialsDetail}>
                   <div className="topic-actions">
                     <button className="button primary" onClick={() => selectFile()} disabled={busy}><Upload size={17} />{t.upload}</button>
-                    <button className="button secondary" onClick={() => folder.current?.click()} disabled={busy}><FolderOpen size={17} />{t.importFolder}</button>
+                    <button className="button secondary" onClick={selectFolder} disabled={busy}><FolderOpen size={17} />{t.importFolder}</button>
                   </div>
                 </Empty>
             ) : !selectedTopic && !sessionId ? (
@@ -649,6 +650,38 @@ export function App() {
       </main>
     </div>
 
+    {importPicker && <Modal title={importPicker.kind === 'folder' ? t.importFolder : importPicker.replaces ? t.replace : t.upload}
+      close={() => setImportPicker(null)} closeLabel={t.close}>
+      <div className="chapter-mode">
+        <strong id="chapter-mode-label">{t.chapterMode}</strong>
+        <div className="chapter-mode-options" role="group" aria-labelledby="chapter-mode-label">
+          {(['knowledge', 'file'] as const).map((mode) => <button key={mode} type="button"
+            className="button secondary" aria-pressed={chapterMode === mode} onClick={() => {
+              setChapterMode(mode)
+              remember('chapterMode.' + courseId, mode)
+            }}>{mode === 'knowledge' ? t.chapterByKnowledge : t.chapterByFile}</button>)}
+        </div>
+        <p className="muted">{t.chapterModeHelp}</p>
+      </div>
+      <input ref={importInput} type="file" hidden
+        {...(importPicker.kind === 'folder' ? { webkitdirectory: '' } : {
+          accept: 'application/pdf,.pdf', multiple: !importPicker.replaces,
+        })}
+        onChange={(event) => {
+          const files = event.target.files
+          if (!files?.length) return
+          if (importPicker.kind === 'folder') uploadFolder(files)
+          else upload(files, importPicker.replaces)
+          setImportPicker(null)
+        }} />
+      <div className="modal-footer">
+        <button className="button secondary" onClick={() => setImportPicker(null)}>{t.cancel}</button>
+        <button className="button primary" onClick={() => importInput.current?.click()}>
+          {importPicker.kind === 'folder' ? <FolderOpen size={17} /> : <Upload size={17} />}
+          {importPicker.kind === 'folder' ? t.folderPrompt : t.filePrompt}
+        </button>
+      </div>
+    </Modal>}
     {modal && <Modal title={modal === 'course' ? t.newCourse : t.ask} close={() => setModal(null)} closeLabel={t.close}>
       <form onSubmit={submitModal}>
         {modal === 'course' ? <label className="field-label">{t.courseName}<input

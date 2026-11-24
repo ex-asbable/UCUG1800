@@ -5,12 +5,12 @@ from shutil import copyfileobj
 from threading import Lock
 from pathlib import PurePosixPath
 
-from .contracts import Dialogue, Evaluation, Hypothesis, Question, QuestionAudit, ReviewGuide, RuntimeSettings, TopicSelection
+from .contracts import ChapterMode, Dialogue, Evaluation, Hypothesis, Question, QuestionAudit, ReviewGuide, RuntimeSettings, TopicSelection
 from .grading import UnsupportedMath, match_tex, normalize_text, tex_value
 from .jobs import AppError, Job, JobWorker, complete, create_job, find_job, lookup
 from .localization import Localizer
 from .materials import (
-    KEY, build_outline, outline_pages, publish_outline, readable_pages,
+    KEY, build_file_outline, build_outline, outline_pages, publish_outline, readable_pages,
     select_pages, source_ids, topic_version, validate_sources,
 )
 from .models import ModelError, validate_language
@@ -91,7 +91,7 @@ class TutorService:
     def locale(db):
         return db.execute("SELECT locale FROM preferences WHERE id = 1").fetchone()[0]
 
-    def import_material(self, course_id, filename, file_bytes, request_id, replaces):
+    def import_material(self, course_id, filename, file_bytes, request_id, replaces, chapter_mode: ChapterMode = "knowledge"):
         filename = PurePosixPath(filename.replace("\\", "/")).name
         if not filename or not filename.lower().endswith(".pdf"):
             raise AppError("unsupported_format", 415)
@@ -99,6 +99,8 @@ class TutorService:
             raise AppError("invalid_pdf", 422)
         digest = hashlib.sha256(file_bytes).hexdigest()
         input_data = {"filename": filename, "digest": digest, "replacesId": replaces}
+        if chapter_mode == "file":
+            input_data["chapterMode"] = chapter_mode
         target = None
         try:
             with self.store.connect(write=True) as db:
@@ -126,7 +128,7 @@ class TutorService:
         self.worker.notify()
         return material_id, job_id
 
-    def import_folder(self, course_id, files, request_id, file_limit):
+    def import_folder(self, course_id, files, request_id, file_limit, chapter_mode: ChapterMode = "knowledge"):
         issues = []
         entries = []
         names = set()
@@ -147,6 +149,8 @@ class TutorService:
             entries.append((name, digest, stream))
 
         input_data = {"files": [[name, digest] for name, digest, _ in entries], "issues": issues}
+        if chapter_mode == "file":
+            input_data["chapterMode"] = chapter_mode
         targets = []
         try:
             with self.store.connect(write=True) as db:
@@ -379,6 +383,7 @@ class TutorService:
 
     def run_import(self, job: Job):
         is_folder = job.kind == "folder"
+        file_chapters = job.payload["input"].get("chapterMode") == "file"
         identifiers = job.payload["materialIds"] if is_folder else [job.payload["materialId"]]
         with self.store.connect(write=True) as db:
             materials = [lookup(db, "materials", identifier, job.course) for identifier in identifiers]
@@ -396,29 +401,35 @@ class TutorService:
                 return
             db.execute("UPDATE jobs SET stage = 'generating' WHERE id = ?", (job.id,))
             db.executemany("UPDATE materials SET status = 'generating' WHERE id = ?", [(identifier,) for identifier in indexed])
-            active = [
-                row["id"] for row in db.execute(
-                    "SELECT id FROM materials WHERE course_id = ? AND active = 1 ORDER BY created, rowid", (job.course,),
-                )
-            ]
+            current_outline = course["outline_id"]
+            active = json.loads(lookup(db, "outlines", current_outline, job.course)["material_ids"]) if current_outline else []
             if replaces:
                 active[active.index(replaces)] = indexed[0]
             else:
                 active.extend(indexed)
-            pages = readable_pages(db, active)
-            old_topics = [
-                {"key": row["key"], "title": json.loads(row["content"])["title"]}
-                for row in db.execute(
-                    """SELECT t.key, tv.content FROM topic_versions tv JOIN topics t ON t.id = tv.topic_id
-                       WHERE tv.outline_id = ? ORDER BY tv.position""", (course["outline_id"],),
-                )
-            ]
-        topics = build_outline(self.provider, name=course["name"], pages=pages, old_topics=old_topics, locale=job.locale)
+            if file_chapters:
+                topics = build_file_outline(db, job.course, active, job.locale)
+            else:
+                pages = readable_pages(db, active)
+                old_topics = [
+                    {"key": row["key"], "title": json.loads(row["content"])["title"]}
+                    for row in db.execute(
+                        """SELECT t.key, tv.content FROM topic_versions tv JOIN topics t ON t.id = tv.topic_id
+                           WHERE tv.outline_id = (
+                               SELECT o.id FROM outlines o WHERE o.course_id = ? AND EXISTS (
+                                   SELECT 1 FROM topic_versions v WHERE v.outline_id = o.id
+                                   AND json_extract(v.content, '$.materialId') IS NULL
+                               ) ORDER BY o.created DESC, o.rowid DESC LIMIT 1
+                           ) ORDER BY tv.position""", (job.course,),
+                    )
+                ]
+        if not file_chapters:
+            topics = build_outline(self.provider, name=course["name"], pages=pages, old_topics=old_topics, locale=job.locale)
         with self.store.connect(write=True) as db:
             if replaces:
                 db.execute("UPDATE materials SET active = 0, status = 'superseded' WHERE id = ?", (replaces,))
             db.executemany("UPDATE materials SET active = 1, status = 'ready' WHERE id = ?", [(identifier,) for identifier in indexed])
-            outline_id = publish_outline(db, job.course, active, topics, job.locale)
+            outline_id = publish_outline(db, job.course, active, topics, job.locale, file_chapters=file_chapters)
             complete(db, job, {**outcome, "outlineId": outline_id})
 
     def parse_material(self, material, job):
@@ -475,7 +486,7 @@ class TutorService:
             course = lookup(db, "courses", job.course)
             topic = topic_version(db, outline_id, topic_id)
             content = json.loads(topic["content"])
-            pages = select_pages(outline_pages(db, outline_id),
+            pages = select_pages(outline_pages(db, outline_id, content.get("materialId")),
                                  f"{content['title']} {content['explanation']}", content["sources"])
         guide = self.provider.generate(
             "review_guide", GUIDE_RULES,
@@ -494,7 +505,7 @@ class TutorService:
     def conversation_context(self, db, session, query):
         topic = topic_version(db, session["outline_id"], session["topic_id"])
         content = json.loads(topic["content"]) if topic else {}
-        pages = outline_pages(db, session["outline_id"])
+        pages = outline_pages(db, session["outline_id"], content.get("materialId"))
         return topic, content, select_pages(pages, f"{content.get('title', '')} {query}", content.get("sources"))
 
     def run_dialogue(self, job: Job):
@@ -743,10 +754,10 @@ class TutorService:
             attempt = db.execute("SELECT * FROM attempts WHERE id = ?", (job.payload["attemptId"],)).fetchone()
             gap = lookup(db, "gaps", check["gap_id"]) if check["gap_id"] else None
             question = Question.model_validate_json(check["body"])
-            pages = select_pages(
-                outline_pages(db, session["outline_id"]), question.prompt,
-                [source.model_dump() for source in question.sources],
-            )
+            topic = topic_version(db, session["outline_id"], session["topic_id"])
+            content = json.loads(topic["content"]) if topic else {}
+            pages = select_pages(outline_pages(db, session["outline_id"], content.get("materialId")),
+                                 question.prompt, [source.model_dump() for source in question.sources])
         answer = json.loads(attempt["answer"])
         reason = attempt["reason"]
         correctness, evidence_type, evidence, feedback, code, other = self.evaluate_answer(

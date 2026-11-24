@@ -185,7 +185,9 @@ def read_office(path, suffix, images=None):
         raise ModelError("invalid_office") from error
 
 
-def outline_pages(db, outline_id: str) -> list[dict]:
+def outline_pages(db, outline_id: str, material_id: str | None = None) -> list[dict]:
+    if material_id:
+        return readable_pages(db, [material_id])
     outline = db.execute("SELECT material_ids FROM outlines WHERE id = ?", (outline_id,)).fetchone()
     return readable_pages(db, json.loads(outline["material_ids"]))
 
@@ -328,18 +330,47 @@ def build_outline(provider, *, name: str, pages: list[dict], old_topics: list[di
     return result.topics
 
 
-def publish_outline(db, course_id: str, material_ids: list[str], topics: list[Topic], locale: str):
+def build_file_outline(db, course_id: str, material_ids: list[str], locale: str) -> list[Topic]:
+    materials = {row["id"]: row for row in db.execute(
+        "SELECT id, filename, replaces_id FROM materials WHERE course_id = ?", (course_id,),
+    )}
+    if locale == "en":
+        explanation = "This chapter covers one course file. Open the sources or generate a review guide to study it."
+        opening = "What part of this file would you like to work through?"
+    else:
+        explanation = "本章对应一份课件。可以查看原文出处，或生成本章的复习讲解稿。"
+        opening = "你想先讨论这份课件里的哪一部分？"
+    topics = []
+    for material_id in material_ids:
+        material = materials[material_id]
+        original = material
+        while original["replaces_id"]:
+            original = materials[original["replaces_id"]]
+        pages = readable_pages(db, [material_id])
+        indices = sorted({0, len(pages) // 2, len(pages) - 1})
+        topics.append(Topic(
+            key=f"file_{original['id']}", parentKey=None, title=material["filename"], coverage="supported",
+            explanation=explanation, opening=opening,
+            sources=[Source(materialId=material_id, page=pages[index]["page"]) for index in indices],
+        ))
+    return topics
+
+
+def publish_outline(db, course_id: str, material_ids: list[str], topics: list[Topic], locale: str, *, file_chapters=False):
     outline_id = new_id()
     db.execute("INSERT INTO outlines VALUES (?, ?, ?, ?)", (outline_id, course_id, encode(material_ids), now()))
     for topic in topics:
         db.execute("INSERT OR IGNORE INTO topics VALUES (?, ?, ?)", (new_id(), course_id, topic.key))
     ids = {row["key"]: row["id"] for row in db.execute("SELECT id, key FROM topics WHERE course_id = ?", (course_id,))}
     for position, topic in enumerate(topics):
+        content = topic.model_dump(exclude={"key", "parentKey"})
+        if file_chapters:
+            content["materialId"] = topic.sources[0].materialId
         db.execute(
             "INSERT INTO topic_versions VALUES (?, ?, ?, ?, ?, ?)",
             (
                 outline_id, ids[topic.key], ids.get(topic.parentKey), position, locale,
-                encode(topic.model_dump(exclude={"key", "parentKey"})),
+                encode(content),
             ),
         )
     db.execute("UPDATE courses SET outline_id = ? WHERE id = ?", (outline_id, course_id))

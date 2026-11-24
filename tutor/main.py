@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from .contracts import Locale, ModelCatalogRequest, ModelEffortsRequest, QuestionFormat, RuntimeSettings
+from .contracts import ChapterMode, Locale, ModelCatalogRequest, ModelEffortsRequest, QuestionFormat, RuntimeSettings
 from .jobs import AppError, lookup, public_job
 from .model_catalog import list_models, model_efforts
 from .models import ModelError, Provider
@@ -100,7 +100,7 @@ def create_app(data_directory: Path | None = None, provider=None, *, desktop_tok
         finally:
             service.worker.close()
 
-    app = FastAPI(title="AI Tutor", version="0.1.0", lifespan=lifespan, docs_url="/api/docs", redoc_url=None)
+    app = FastAPI(title="AI Tutor", version="0.1.1", lifespan=lifespan, docs_url="/api/docs", redoc_url=None)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "[::1]"])
 
     @app.middleware("http")
@@ -196,12 +196,15 @@ def create_app(data_directory: Path | None = None, provider=None, *, desktop_tok
     def upload(
         course_id: ApiId, request: Request, file: Annotated[UploadFile, File()],
         requestId: Annotated[ApiId, Form()], replacesId: Annotated[ApiId | None, Form()] = None,
+        chapterMode: Annotated[ChapterMode, Form()] = "knowledge",
     ):
         try:
             contents = file.file.read(FILE_LIMIT + 1)
             if len(contents) > FILE_LIMIT:
                 raise AppError("file_too_large", 413)
-            material, job = service(request).import_material(course_id, file.filename or "", contents, requestId, replacesId)
+            material, job = service(request).import_material(
+                course_id, file.filename or "", contents, requestId, replacesId, chapterMode,
+            )
             return {"materialId": material, "jobId": job}
         finally:
             file.file.close()
@@ -209,12 +212,12 @@ def create_app(data_directory: Path | None = None, provider=None, *, desktop_tok
     @api.post("/courses/{course_id}/materials/folder", status_code=202)
     def upload_folder(
         course_id: ApiId, request: Request, files: Annotated[list[UploadFile], File()],
-        requestId: Annotated[ApiId, Form()],
+        requestId: Annotated[ApiId, Form()], chapterMode: Annotated[ChapterMode, Form()] = "knowledge",
     ):
         if not files or len(files) > 1000 or sum(file.size or 0 for file in files) > FOLDER_LIMIT:
             raise AppError("folder_too_large", 413)
         return service(request).import_folder(
-            course_id, [(file.filename or "", file.file) for file in files], requestId, FILE_LIMIT,
+            course_id, [(file.filename or "", file.file) for file in files], requestId, FILE_LIMIT, chapterMode,
         )
 
     @api.get("/courses/{course_id}/jobs/{job_id}")

@@ -111,7 +111,7 @@ def _codex_models(provider: Provider):
             try:
                 connection = _CodexCatalogProcess(process, monotonic() + min(20, provider.settings.timeout))
                 connection.request("initialize", {
-                    "clientInfo": {"name": "ai_tutor", "title": "AI Tutor", "version": "0.1.0"},
+                    "clientInfo": {"name": "ai_tutor", "title": "AI Tutor", "version": "0.1.1"},
                 })
                 connection.send({"method": "initialized", "params": {}})
                 models = {}

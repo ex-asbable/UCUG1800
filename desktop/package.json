@@ -1,7 +1,7 @@
 {
   "name": "ai-tutor",
   "productName": "AI Tutor",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Local AI tutor and course review companion",
   "author": "AI Tutor contributors",
   "private": true,
