@@ -24,7 +24,7 @@ export type Job = {
   jobId: string
   kind: 'import' | 'folder' | 'start' | 'dialogue' | 'question' | 'evaluate' | 'guide'
   status: 'queued' | 'running' | 'ready' | 'failed'
-  stage: 'queued' | 'parsing' | 'generating' | 'ready'
+  stage: 'queued' | 'parsing' | 'analyzing_images' | 'generating' | 'ready'
   error: string | null
 }
 export type ReviewGuide = { markdown: string; sources: Ref[] }
@@ -36,6 +36,7 @@ export type Material = {
   issue: string | null
   active: boolean
   pageCount: number
+  requiresMultimodal: boolean
   unreadablePages: number[]
 }
 export type Catalog = { course: Course; materials: Material[]; jobs: Job[] }
@@ -102,7 +103,7 @@ export type Check = {
   solution?: string
   sources?: Ref[]
 }
-export type Source = Ref & { filename: string; text: string; status: string; url: string; isPdf: boolean }
+export type Source = Ref & { filename: string; text: string; visualDescription: string; status: string; url: string; isPdf: boolean }
 
 declare global {
   interface Window {

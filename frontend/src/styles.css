@@ -102,6 +102,7 @@ textarea::placeholder, input::placeholder { color: #776e87; opacity: 1; }
 .material-status { color: var(--muted); display: block; font-size: .8rem; margin-top: 4px; }
 .material-status.ready { color: var(--green); }
 .material-status.failed { color: #9f422b; }
+.material-vision { margin-top: 6px; }
 .material .text-button { margin: 5px 0 0 42px; }
 .unreadable { color: #8e4f18; margin-top: 7px; font-size: .84rem; line-height: 1.55; }
 summary { cursor: pointer; }

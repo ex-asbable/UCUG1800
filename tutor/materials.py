@@ -1,5 +1,6 @@
 import json
 import logging
+import posixpath
 import re
 from pathlib import PurePosixPath
 from xml.etree.ElementTree import ParseError
@@ -17,6 +18,7 @@ from .storage import encode, new_id, now
 log = logging.getLogger(__name__)
 PAGE_LIMIT = 350
 PAGE_TEXT_LIMIT = 24_000
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
 OUTLINE_BATCH = 95_000
 KEY = re.compile(r"[a-z][a-z0-9_]{1,63}\Z")
 TERMS = re.compile(r"[a-zA-Z0-9_]{2,}|[\u3400-\u9fff]")
@@ -56,12 +58,12 @@ def read_pdf(path) -> list[tuple[int, str, str]]:
         raise ModelError("invalid_pdf") from error
 
 
-def read_material(path, filename):
+def read_material(path, filename, images=None):
     if filename.lower().endswith(".pdf"):
         return read_pdf(path)
     suffix = PurePosixPath(filename).suffix.lower()
     if suffix in {".docx", ".pptx"}:
-        return read_office(path, suffix)
+        return read_office(path, suffix, images)
     if suffix in {".txt", ".md", ".markdown", ".tex", ".csv", ".tsv", ".rst", ".json", ".xml", ".log"}:
         data = path.read_bytes()
         try:
@@ -105,7 +107,7 @@ def numbered_sections(sections):
     return result
 
 
-def read_office(path, suffix):
+def read_office(path, suffix, images=None):
     word = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
     slide = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
     drawing = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
@@ -121,11 +123,45 @@ def read_office(path, suffix):
                     raise ModelError("too_many_sections")
                 return fromstring(archive.read(name))
 
+            def embedded_images(name, root):
+                if images is None:
+                    return []
+                legacy_image = "{urn:schemas-microsoft-com:vml}imagedata"
+                ids = [
+                    element.get(relation + ("embed" if element.tag == drawing + "blip" else "id"))
+                    for element in root.iter() if element.tag in (drawing + "blip", legacy_image)
+                ]
+                if not any(ids):
+                    return []
+                directory, basename = posixpath.split(name)
+                relationships = posixpath.join(directory, "_rels", basename + ".rels")
+                if relationships not in archive.NameToInfo:
+                    return []
+                targets = {}
+                for item in xml(relationships):
+                    if item.get("TargetMode") == "External" or not item.get("Type", "").endswith("/image"):
+                        continue
+                    target = item.get("Target", "")
+                    path = posixpath.normpath(target.lstrip("/") if target.startswith("/")
+                                              else posixpath.join(directory, target))
+                    if path in archive.NameToInfo and PurePosixPath(path).suffix.lower() in IMAGE_SUFFIXES:
+                        targets[item.get("Id")] = path
+                return [targets[identifier] for identifier in dict.fromkeys(ids) if identifier in targets]
+
             if suffix == ".docx":
-                document = xml("word/document.xml")
-                paragraphs = ["".join(node.text or "" for node in paragraph.iter(word + "t"))
-                              for paragraph in document.iter(word + "p")]
-                return text_sections("\n".join(paragraphs))
+                name = "word/document.xml"
+                document = xml(name)
+                paragraphs = list(document.iter(word + "p"))
+                texts = ["".join(node.text or "" for node in paragraph.iter(word + "t"))
+                         for paragraph in paragraphs]
+                pages = text_sections("\n".join(texts))
+                for target in embedded_images(name, document):
+                    if len(pages) >= PAGE_LIMIT:
+                        raise ModelError("too_many_sections")
+                    number = len(pages) + 1
+                    pages.append((number, "", "unreadable"))
+                    images[number] = [target]
+                return pages
 
             presentation = xml("ppt/presentation.xml")
             targets = {item.get("Id"): item.get("Target", "")
@@ -134,11 +170,14 @@ def read_office(path, suffix):
             if len(slide_ids) > PAGE_LIMIT:
                 raise ModelError("too_many_sections")
             sections = []
-            for identifier in slide_ids:
+            for number, identifier in enumerate(slide_ids, 1):
                 target = targets[identifier.get(relation + "id")].removeprefix("/ppt/").removeprefix("slides/")
                 if not re.fullmatch(r"slide\d+\.xml", target):
                     raise ModelError("invalid_office")
-                root = xml("ppt/slides/" + target)
+                name = "ppt/slides/" + target
+                root = xml(name)
+                if targets_for_slide := embedded_images(name, root):
+                    images[number] = targets_for_slide
                 sections.append("\n".join("".join(node.text or "" for node in paragraph.iter(drawing + "t"))
                                           for paragraph in root.iter(drawing + "p"))[:PAGE_TEXT_LIMIT])
             return numbered_sections(sections)
@@ -154,13 +193,16 @@ def outline_pages(db, outline_id: str) -> list[dict]:
 def readable_pages(db, material_ids: list[str]) -> list[dict]:
     pages = []
     for material_id in material_ids:
-        pages.extend(
-            {"materialId": material_id, "page": row["number"], "text": row["text"]}
-            for row in db.execute(
-                "SELECT number, text FROM pages WHERE material_id = ? AND status = 'readable' ORDER BY number",
-                (material_id,),
-            )
-        )
+        for row in db.execute(
+            """SELECT p.number, p.text, v.description FROM pages p
+               LEFT JOIN page_visuals v USING (material_id, number)
+               WHERE p.material_id = ? AND (p.status = 'readable' OR v.description <> '')
+               ORDER BY p.number""", (material_id,),
+        ):
+            page = {"materialId": material_id, "page": row["number"], "text": row["text"]}
+            if row["description"]:
+                page["visualDescription"] = row["description"]
+            pages.append(page)
     return pages
 
 
@@ -186,12 +228,16 @@ def select_pages(pages: list[dict], query: str, refs: list[dict] | None = None) 
 
     def rank(page: dict):
         key = (page["materialId"], page["page"])
-        matches = terms.intersection(TERMS.findall(page["text"].casefold()))
+        content = page["text"] + " " + page.get("visualDescription", "")
+        matches = terms.intersection(TERMS.findall(content.casefold()))
         relevance = sum(2 if len(term) > 2 else 1 for term in matches)
         return relevance + (26 if key in exact else 4 if key in neighbors else 0)
 
     return [
-        {**page, "text": page["text"][:2500]}
+        {
+            **page, "text": page["text"][:2500],
+            **({"visualDescription": page["visualDescription"][:2500]} if "visualDescription" in page else {}),
+        }
         for page in sorted(pages, key=rank, reverse=True)[:12]
     ]
 
@@ -240,6 +286,8 @@ def build_outline(provider, *, name: str, pages: list[dict], old_topics: list[di
         if len(excerpt) > 1400:
             excerpt = f"{excerpt[:1050]}\n[… ]\n{excerpt[-300:]}"
         part = {**page, "text": excerpt}
+        if "visualDescription" in part:
+            part["visualDescription"] = part["visualDescription"][:1500]
         length = len(encode(part))
         if size + length > OUTLINE_BATCH:
             batches.append([])
@@ -258,7 +306,10 @@ def build_outline(provider, *, name: str, pages: list[dict], old_topics: list[di
         (ref.materialId, ref.page) for draft in drafts for topic in draft for ref in topic.sources
     }
     excerpts = [
-        {**page, "text": page["text"][:260]}
+        {
+            **page, "text": page["text"][:260],
+            **({"visualDescription": page["visualDescription"][:350]} if "visualDescription" in page else {}),
+        }
         for batch in batches for page in batch
         if (page["materialId"], page["page"]) in referenced
     ]

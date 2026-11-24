@@ -35,6 +35,13 @@ CREATE TABLE IF NOT EXISTS pages (
     status TEXT NOT NULL,
     PRIMARY KEY (material_id, number)
 );
+CREATE TABLE IF NOT EXISTS page_visuals (
+    material_id TEXT NOT NULL,
+    number INTEGER NOT NULL,
+    description TEXT,
+    PRIMARY KEY (material_id, number),
+    FOREIGN KEY (material_id, number) REFERENCES pages(material_id, number)
+);
 CREATE TABLE IF NOT EXISTS outlines (
     id TEXT PRIMARY KEY,
     course_id TEXT NOT NULL REFERENCES courses(id),

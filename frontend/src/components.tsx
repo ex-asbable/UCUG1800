@@ -65,7 +65,11 @@ export function Sources({ refs, locale, open, materialName }: {
 export function SourceModal({ source, locale, t, close }: { source: Source; locale: Locale; t: Copy; close: () => void }) {
   return <Modal title={t.sourcePreview} close={close} closeLabel={t.close} className="source-modal">
     <div className="source-meta"><FileText size={19} /> <strong>{source.filename}</strong><span>{unitLabel(source.page, locale, source.filename)}</span></div>
-    <pre className="source-text">{source.text || t.unreadable}</pre>
+    {(source.text || !source.visualDescription) && <pre className="source-text">{source.text || t.unreadable}</pre>}
+    {source.visualDescription && <section>
+      <h3>{t.visualDescription}</h3>
+      <pre className="source-text">{source.visualDescription}</pre>
+    </section>}
     <div className="modal-footer">
       <a className="button primary" href={source.url} target={source.isPdf ? '_blank' : undefined}
         rel={source.isPdf ? 'noopener noreferrer' : undefined} download={!source.isPdf}>
@@ -84,11 +88,15 @@ export function Empty({ title, detail, icon = 'book', children }: {
   </div>
 }
 
-export function Jobs({ jobs, locale, t, retry }: { jobs: Job[]; locale: Locale; t: Copy; retry: (job: Job) => void }) {
+export function Jobs({ jobs, locale, t, retry, openModelSettings }: {
+  jobs: Job[]; locale: Locale; t: Copy; retry: (job: Job) => void; openModelSettings?: () => void
+}) {
   return <div className="job-list">{jobs.map((job) => (
     <div className={'job ' + (job.status === 'failed' ? 'job-failed' : '')} key={job.jobId} role="status">
       {pendingJob(job) ? <LoaderCircle size={16} className="spin" /> : <AlertCircle size={16} />}
       <span>{job.error ? explain(job.error, locale) : job.kind === 'evaluate' ? t.grading : t[job.stage]}</span>
+      {job.error === 'multimodal_required' && openModelSettings &&
+        <button className="text-button" onClick={openModelSettings}>{t.runtimeSettings}</button>}
       {job.status === 'failed' && <button className="text-button" onClick={() => retry(job)}>{t.retry}</button>}
     </div>
   ))}</div>

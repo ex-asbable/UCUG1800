@@ -21,13 +21,18 @@ class Views:
                    WHERE m.course_id = ? ORDER BY m.created, m.rowid""", (course_id,),
             ):
                 pages = db.execute(
-                    "SELECT number, status FROM pages WHERE material_id = ? ORDER BY number", (row["id"],),
+                    """SELECT p.number, p.status, v.number AS visual, v.description FROM pages p
+                       LEFT JOIN page_visuals v USING (material_id, number)
+                       WHERE p.material_id = ? ORDER BY p.number""", (row["id"],),
                 ).fetchall()
                 materials.append({
                     "id": row["id"], "filename": row["filename"], "status": row["status"],
                     "active": bool(row["active"]), "pageCount": len(pages),
                     "issue": row["issue"],
-                    "unreadablePages": [page["number"] for page in pages if page["status"] != "readable"],
+                    "requiresMultimodal": any(page["visual"] is not None for page in pages),
+                    "unreadablePages": [
+                        page["number"] for page in pages if page["status"] != "readable" and not page["description"]
+                    ],
                 })
             jobs = [
                 public_job(row) for row in db.execute(

@@ -37,6 +37,10 @@ class Packet(Contract):
     locale: Locale
 
 
+class VisualDescription(Packet):
+    description: str
+
+
 class Source(Contract):
     materialId: str
     page: int

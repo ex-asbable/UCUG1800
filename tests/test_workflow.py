@@ -13,6 +13,7 @@ from zipfile import ZipFile
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+from PIL import Image
 from pypdf import PdfReader, PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
@@ -57,17 +58,28 @@ class FixtureProvider:
         self.guide_calls = 0
         self.fail_evaluation = False
         self.invalid_citation = False
+        self.visual_calls = []
+        self.reject_visual_page = None
+        self.outline_pages = []
 
     def status(self):
         return {"provider": "api", "ready": True, "error": None}
 
-    def generate(self, task, _instructions, data, schema):
+    def generate(self, task, _instructions, data, schema, *, images=()):
         locale = data["locale"]
         en = locale == "en"
         pages = data.get("pages", [])
         sources = [{key: page[key] for key in ("materialId", "page")} for page in pages[:1]]
-        if task in ("outline", "merge_outline"):
+        if task == "describe_visuals":
+            if not images or any(not image.startswith(b"\xff\xd8") for image in images):
+                raise AssertionError("Expected JPEG attachments")
+            self.visual_calls.append(data["page"])
+            if data["page"] == self.reject_visual_page:
+                raise ModelError("multimodal_required")
+            result = {"description": "图中比较了检验统计量。"}
+        elif task in ("outline", "merge_outline"):
             self.outline_calls += 1
+            self.outline_pages = pages
             result = {"topics": [{
                 "key": "hypothesis_testing", "parentKey": None,
                 "title": "Hypothesis testing" if en else "假设检验",
@@ -307,13 +319,26 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
 
     def test_folder_import_keeps_originals_and_builds_one_outline(self):
+        diagram = io.BytesIO()
+        Image.new("RGB", (80, 80), "red").save(diagram, "PNG")
         word_file = io.BytesIO()
         with ZipFile(word_file, "w") as archive:
             archive.writestr("word/document.xml", """
-                <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-                  <w:body><w:p><w:r><w:t>Decision rules</w:t></w:r></w:p></w:body>
+                <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+                  xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+                  <w:body><w:p><w:r><w:t>Decision rules</w:t><w:drawing>
+                    <a:blip r:embed="rId2" />
+                  </w:drawing></w:r></w:p></w:body>
                 </w:document>
             """)
+            archive.writestr("word/_rels/document.xml.rels", """
+                <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+                  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
+                    Target="media/image.png" />
+                </Relationships>
+            """)
+            archive.writestr("word/media/image.png", diagram.getvalue())
         slides = io.BytesIO()
         with ZipFile(slides, "w") as archive:
             archive.writestr("ppt/presentation.xml", """
@@ -329,17 +354,27 @@ class WorkflowTests(unittest.TestCase):
             """)
             archive.writestr("ppt/slides/slide2.xml", """
                 <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
-                  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+                  xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+                  xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
                   <a:p><a:r><a:t>Type II error</a:t></a:r></a:p>
+                  <a:blip r:embed="rId3" />
                 </p:sld>
             """)
+            archive.writestr("ppt/slides/_rels/slide2.xml.rels", """
+                <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+                  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
+                    Target="../media/image.png" />
+                </Relationships>
+            """)
+            archive.writestr("ppt/media/image.png", diagram.getvalue())
         path = f"/courses/{self.course}/materials"
         entries = [
             ("files", ("week-1/sample.pdf", pdf_bytes("Compare p with alpha."))),
             ("files", ("week-1/nested/lecture.docx", word_file.getvalue())),
             ("files", ("week-1/nested/notes.md", b"# Review\n\nCompare $p$ with alpha.")),
             ("files", ("week-1/slides.pptx", slides.getvalue())),
-            ("files", ("week-1/diagram.png", b"original-bytes")),
+            ("files", ("week-1/diagram.png", diagram.getvalue())),
+            ("files", ("week-1/broken.png", b"invalid image")),
             ("files", ("week-1/broken.pdf", b"corrupt PDF")),
             ("files", ("week-1/../invalid.txt", b"invalid")),
         ]
@@ -354,15 +389,44 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(result["issues"], [{"filename": "week-1/../invalid.txt", "code": "invalid_material_name"}])
         self.wait(result["jobId"])
         materials = self.call("GET", path)["materials"]
-        self.assertEqual([item["status"] for item in materials], ["ready", "ready", "ready", "ready", "attached", "attached"])
+        self.assertEqual([item["status"] for item in materials],
+                         ["ready", "ready", "ready", "ready", "ready", "attached", "attached"])
         self.assertEqual(self.provider.outline_calls, 1)
         for offset, text in ((1, "Decision rules"), (2, "# Review"), (3, "Type II error")):
             unit = self.call("GET", path + f"/{materials[offset]['id']}/units/1")
             self.assertIn(text, unit["text"])
             self.assertFalse(unit["isPdf"])
         original = self.client.get(BASE + path + f"/{materials[4]['id']}/original")
-        self.assertEqual(original.content, b"original-bytes")
+        self.assertEqual(original.content, diagram.getvalue())
         self.assertIn("attachment", original.headers["content-disposition"])
+        self.assertFalse(materials[0]["requiresMultimodal"])
+        for offset, number in ((1, 2), (3, 1), (4, 1)):
+            self.assertTrue(materials[offset]["requiresMultimodal"])
+            unit = self.call("GET", path + f"/{materials[offset]['id']}/units/{number}")
+            self.assertIn("检验统计量", unit["visualDescription"])
+
+    def test_scanned_pdf_retries_with_saved_visual_pages(self):
+        scan = io.BytesIO()
+        image = Image.new("RGB", (150, 150), "white")
+        image.save(scan, "PDF", save_all=True, append_images=[image])
+        self.provider.reject_visual_page = 2
+        uploaded = self.upload(scan.getvalue())
+        job_id = uploaded["jobId"]
+        self.assertEqual(self.wait(job_id, "failed")["error"], "multimodal_required")
+        course = f"/courses/{self.course}"
+        material = self.call("GET", course + "/materials")["materials"][0]
+        self.assertTrue(material["requiresMultimodal"])
+        self.assertEqual(self.provider.outline_calls, 0)
+        self.provider.reject_visual_page = None
+        self.call("POST", course + f"/jobs/{job_id}/retry")
+        self.wait(job_id)
+        self.assertEqual(self.provider.visual_calls, [1, 2, 2])
+        self.assertEqual([page["page"] for page in self.provider.outline_pages], [1, 2])
+        self.assertTrue(all(page["visualDescription"] for page in self.provider.outline_pages))
+        unit = self.call("GET", course + f"/materials/{material['id']}/units/2")
+        self.assertEqual(unit["text"], "")
+        self.assertEqual(unit["status"], "readable")
+        self.assertTrue(unit["url"].endswith("#page=2"))
 
     def test_review_guide_retries_citations_and_reuses_version_and_locale(self):
         uploaded = self.upload(pdf_bytes("Compare p with alpha."))
@@ -429,14 +493,27 @@ class ModelAdapterTests(unittest.TestCase):
             opener.return_value.open.return_value.__enter__.return_value.read.return_value = json.dumps(payload).encode()
             result = Provider().generate("select_topic", "Select a topic.", {"locale": "en"}, TopicSelection)
             request = opener.return_value.open.call_args.args[0]
-        self.assertEqual(result.topicKey, "p_value")
-        self.assertEqual(request.full_url, "https://example.invalid/v1/responses")
-        self.assertEqual(request.get_header("Authorization"), "Bearer test-key")
-        submitted = json.loads(request.data)
-        self.assertFalse(submitted["store"])
-        self.assertTrue(submitted["text"]["format"]["strict"])
-        self.assertEqual(submitted["text"]["format"]["schema"], TopicSelection.model_json_schema())
-        self.assertNotIn("reasoning", submitted)
+            self.assertEqual(result.topicKey, "p_value")
+            self.assertEqual(request.full_url, "https://example.invalid/v1/responses")
+            self.assertEqual(request.get_header("Authorization"), "Bearer test-key")
+            submitted = json.loads(request.data)
+            self.assertFalse(submitted["store"])
+            self.assertTrue(submitted["text"]["format"]["strict"])
+            self.assertEqual(submitted["text"]["format"]["schema"], TopicSelection.model_json_schema())
+            self.assertNotIn("reasoning", submitted)
+            Provider().generate("select_topic", "Select a topic.", {"locale": "en"}, TopicSelection,
+                                images=(b"image",))
+            content = json.loads(opener.return_value.open.call_args.args[0].data)["input"][0]["content"]
+            self.assertEqual(content[0]["type"], "input_text")
+            self.assertEqual(content[1]["image_url"], "data:image/jpeg;base64,aW1hZ2U=")
+            opener.return_value.open.side_effect = HTTPError(
+                request.full_url, 400, "Bad Request", {},
+                io.BytesIO(b'{"error":{"message":"This model does not support image input."}}'),
+            )
+            with self.assertRaises(ModelError) as error:
+                Provider().generate("select_topic", "Select a topic.", {"locale": "en"}, TopicSelection,
+                                    images=(b"image",))
+            self.assertEqual(error.exception.code, "multimodal_required")
 
     def test_responses_api_sends_effort_and_reports_unsupported_level(self):
         details = io.BytesIO(b'{"error":{"param":"reasoning.effort","message":"Unsupported value"}}')

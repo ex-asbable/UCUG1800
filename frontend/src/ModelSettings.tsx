@@ -153,6 +153,7 @@ export function ModelSettings({ runtime, locale, t, close, saved }: {
           {models.map((item) => <option key={item.id} value={item.id}>{item.name === item.id ? item.id : item.name + ' · ' + item.id}</option>)}
         </select>
       </label>
+      <p className="muted">{t.imageModelHelp}</p>
       <label className="field-label">{t.reasoningEffort}
         <select value={activeEffort ?? ''} disabled={!selectedModel || lookingUpEffort || saving}
           onChange={(event) => updateSelection({ effort: (event.target.value || null) as ReasoningEffort | null })}>

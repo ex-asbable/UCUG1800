@@ -236,7 +236,9 @@ def create_app(data_directory: Path | None = None, provider=None, *, desktop_tok
         with service(request).store.connect() as db:
             material = lookup(db, "materials", material_id, course_id)
             page = db.execute(
-                "SELECT * FROM pages WHERE material_id = ? AND number = ?", (material_id, number),
+                """SELECT p.text, p.status, v.description FROM pages p
+                   LEFT JOIN page_visuals v USING (material_id, number)
+                   WHERE p.material_id = ? AND p.number = ?""", (material_id, number),
             ).fetchone()
             if not page:
                 raise AppError("not_found", 404)
@@ -244,7 +246,8 @@ def create_app(data_directory: Path | None = None, provider=None, *, desktop_tok
         base = f"/api/v1/courses/{course_id}/materials/{material_id}"
         return {
             "materialId": material_id, "page": number, "filename": material["filename"],
-            "text": page["text"], "status": page["status"],
+            "text": page["text"], "visualDescription": page["description"] or "",
+            "status": "readable" if page["description"] else page["status"],
             "url": f"{base}/pdf#page={number}" if is_pdf else f"{base}/original",
             "isPdf": is_pdf,
         }

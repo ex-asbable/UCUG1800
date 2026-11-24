@@ -10,11 +10,12 @@ from .grading import UnsupportedMath, match_tex, normalize_text, tex_value
 from .jobs import AppError, Job, JobWorker, complete, create_job, find_job, lookup
 from .localization import Localizer
 from .materials import (
-    KEY, build_outline, outline_pages, publish_outline, read_material, readable_pages,
+    KEY, build_outline, outline_pages, publish_outline, readable_pages,
     select_pages, source_ids, topic_version, validate_sources,
 )
 from .models import ModelError, validate_language
 from .storage import Store, encode, new_id, now
+from .visuals import describe_visuals, visual_material
 
 
 DIALOGUE_RULES = """Guide the learner one step at a time. If only a question was supplied,
@@ -386,7 +387,7 @@ class TutorService:
                 raise AppError("stale_material", 409)
             db.execute("UPDATE jobs SET stage = 'parsing' WHERE id = ?", (job.id,))
         indexed = [material["id"] for material in materials
-                   if material["status"] != "attached" and self.parse_material(material, is_folder)]
+                   if material["status"] != "attached" and self.parse_material(material, job)]
         with self.store.connect(write=True) as db:
             course = lookup(db, "courses", job.course)
             outcome = {"materialIds": identifiers} if is_folder else {"materialId": identifiers[0]}
@@ -420,24 +421,46 @@ class TutorService:
             outline_id = publish_outline(db, job.course, active, topics, job.locale)
             complete(db, job, {**outcome, "outlineId": outline_id})
 
-    def parse_material(self, material, allow_attachment):
+    def parse_material(self, material, job):
         material_id = material["id"]
         filename = material["filename"]
         with self.store.connect(write=True) as db:
             db.execute("UPDATE materials SET status = 'parsing' WHERE id = ?", (material_id,))
+            db.execute("UPDATE jobs SET stage = 'parsing' WHERE id = ?", (job.id,))
             parsed = db.execute("SELECT count(*) FROM pages WHERE material_id = ?", (material_id,)).fetchone()[0]
+            pending = {row["number"] for row in db.execute(
+                "SELECT number FROM page_visuals WHERE material_id = ? AND description IS NULL", (material_id,),
+            )}
         try:
-            if not parsed:
-                pages = read_material(self.store.material_file(material_id, filename), filename)
-                with self.store.connect(write=True) as db:
-                    db.executemany("INSERT INTO pages VALUES (?, ?, ?, ?)", [(material_id, *page) for page in pages])
+            if not parsed or pending:
+                with visual_material(self.store.material_file(material_id, filename), filename) as (pages, visuals, load):
+                    if not parsed:
+                        pending = set(visuals)
+                        with self.store.connect(write=True) as db:
+                            db.executemany("INSERT INTO pages VALUES (?, ?, ?, ?)", [(material_id, *page) for page in pages])
+                            db.executemany(
+                                "INSERT INTO page_visuals (material_id, number) VALUES (?, ?)",
+                                [(material_id, number) for number in visuals],
+                            )
+                    if pending:
+                        with self.store.connect(write=True) as db:
+                            db.execute("UPDATE jobs SET stage = 'analyzing_images' WHERE id = ?", (job.id,))
+                        for number, text, _ in pages:
+                            if number in pending:
+                                description = describe_visuals(self.provider, filename, number, text, job.locale, load(number))
+                                with self.store.connect(write=True) as db:
+                                    db.execute(
+                                        "UPDATE page_visuals SET description = ? WHERE material_id = ? AND number = ?",
+                                        (description, material_id, number),
+                                    )
             with self.store.connect() as db:
-                if not db.execute(
-                    "SELECT 1 FROM pages WHERE material_id = ? AND status = 'readable' LIMIT 1", (material_id,),
-                ).fetchone():
+                if not readable_pages(db, [material_id]):
                     raise ModelError("no_readable_text")
         except ModelError as error:
-            if not allow_attachment:
+            if job.kind != "folder" or error.code not in {
+                "attachment_only", "encrypted_pdf", "too_many_pages", "invalid_pdf", "invalid_office",
+                "too_many_sections", "invalid_text", "invalid_image", "image_too_large", "no_readable_text",
+            }:
                 raise
             with self.store.connect(write=True) as db:
                 db.execute("INSERT OR REPLACE INTO material_issues VALUES (?, ?)", (material_id, error.code))

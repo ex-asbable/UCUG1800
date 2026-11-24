@@ -473,6 +473,7 @@ export function App() {
                     </small>
                   </div>
                 </div>
+                {item.requiresMultimodal && <span className="badge warning material-vision">{t.requiresMultimodal}</span>}
                 {item.issue && <p className="material-issue">{explain(item.issue, locale)}</p>}
                 {item.active && item.filename.toLowerCase().endsWith('.pdf') &&
                   <button className="text-button small" onClick={() => selectFile(item.id)}>{t.replace}</button>}
@@ -542,7 +543,8 @@ export function App() {
                 <MessageSquarePlus size={17} />{t.newQuestion}
               </button>}
             </div>
-            {!!importJobs.length && <Jobs jobs={importJobs} t={t} locale={locale} retry={retry} />}
+            {!!importJobs.length && <Jobs jobs={importJobs} t={t} locale={locale} retry={retry}
+              openModelSettings={() => setShowRuntimeSettings(true)} />}
             {!currentCatalog || (hasOutline && (!currentData || loadingLanguage)) ? (
               <div className="loading" role="status"><LoaderCircle className="spin" size={20} />{loadingLanguage || hasOutline ? t.languageLoading : t.loading}</div>
             ) : view === 'review' ? (
