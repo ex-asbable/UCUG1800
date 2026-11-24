@@ -65,7 +65,8 @@ export function Sources({ refs, locale, open, materialName }: {
 export function SourceModal({ source, locale, t, close }: { source: Source; locale: Locale; t: Copy; close: () => void }) {
   return <Modal title={t.sourcePreview} close={close} closeLabel={t.close} className="source-modal">
     <div className="source-meta"><FileText size={19} /> <strong>{source.filename}</strong><span>{unitLabel(source.page, locale, source.filename)}</span></div>
-    {(source.text || !source.visualDescription) && <pre className="source-text">{source.text || t.unreadable}</pre>}
+    {source.text && <pre className="source-text">{source.text}</pre>}
+    {!source.text && !source.visualDescription && <p className="muted">{t.sourceNoPreview}</p>}
     {source.visualDescription && <section>
       <h3>{t.visualDescription}</h3>
       <pre className="source-text">{source.visualDescription}</pre>

@@ -6,14 +6,29 @@ const { writeFile } = require('node:fs/promises')
 const { basename, join, resolve } = require('node:path')
 const { createInterface } = require('node:readline')
 const { setTimeout: delay } = require('node:timers/promises')
+const { DesktopUpdater } = require('./updates.cjs')
 
 const root = join(__dirname, '..')
 const token = randomBytes(32).toString('hex')
 const originalPdf = /^\/api\/v1\/courses\/[\w-]+\/materials\/[\w-]+\/pdf$/
+const updateInterval = 6 * 60 * 60 * 1000
 let backend
 let origin
 let mainWindow
+let updater
 let shuttingDown = false
+
+async function launchInstaller(filename) {
+  const child = spawn(filename, ['/S', '--updated', '--force-run'], {
+    detached: true, stdio: 'ignore', windowsHide: true,
+  })
+  await new Promise((resolve, reject) => {
+    child.once('spawn', resolve)
+    child.once('error', reject)
+  })
+  child.unref()
+  app.quit()
+}
 
 async function startBackend(dataDirectory) {
   const executable = app.isPackaged
@@ -122,6 +137,9 @@ function configureBridge(dataDirectory) {
     await writeFile(filePath, markdown, 'utf8')
     return true
   })
+  ipcMain.handle('tutor:update-status', (event) => allowed(event) ? updater?.state ?? null : null)
+  ipcMain.handle('tutor:update-check', (event) => allowed(event) ? updater?.check() : null)
+  ipcMain.handle('tutor:update-install', (event) => allowed(event) ? updater?.install() : null)
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -154,6 +172,17 @@ if (!app.requestSingleInstanceLock()) {
     browserSession.webRequest.onBeforeSendHeaders({ urls: [origin + '/*'] }, (details, callback) => {
       callback({ requestHeaders: { ...details.requestHeaders, 'X-AI-Tutor-Desktop': token } })
     })
+    if (app.isPackaged && process.platform === 'win32' && process.arch === 'x64') {
+      updater = new DesktopUpdater({
+        version: app.getVersion(),
+        directory: join(app.getPath('userData'), 'updates'),
+        onStatus: (status) => {
+          if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('tutor:update-status', status)
+        },
+        launchInstaller,
+      })
+      await updater.cleanInstaller().catch(() => {})
+    }
     configureBridge(dataDirectory)
     mainWindow = new BrowserWindow({
       width: 1360, height: 900, minWidth: 700, minHeight: 550, show: false,
@@ -167,6 +196,10 @@ if (!app.requestSingleInstanceLock()) {
       app.quit()
     })
     await mainWindow.loadURL(origin + '/')
+    if (updater) {
+      void updater.check()
+      setInterval(() => void updater.check(), updateInterval).unref()
+    }
   }).catch((error) => {
     dialog.showErrorBox('AI Tutor', '无法启动 AI Tutor / Could not start AI Tutor\n\n' + error.message)
     app.quit()

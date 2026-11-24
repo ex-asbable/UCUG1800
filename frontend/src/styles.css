@@ -48,6 +48,9 @@ textarea { resize: vertical; }
 .model-picker-version { margin-inline-end: auto; color: var(--muted); }
 .runtime i { width: 7px; height: 7px; background: #bf790a; border-radius: 50%; }
 .runtime-ready i { background: #26816d; }
+.update-available { color: var(--purple-dark); background: var(--lavender); }
+.update-panel { display: grid; gap: 12px; }
+.update-progress { width: 100%; accent-color: var(--purple); }
 .language-select { display: flex; align-items: center; gap: 7px; color: var(--muted); }
 
 .button {
@@ -104,7 +107,6 @@ textarea::placeholder, input::placeholder { color: #776e87; opacity: 1; }
 .material-status.failed { color: #9f422b; }
 .material-vision { margin-top: 6px; }
 .material .text-button { margin: 5px 0 0 42px; }
-.unreadable { color: #8e4f18; margin-top: 7px; font-size: .84rem; line-height: 1.55; }
 summary { cursor: pointer; }
 .topic-button, .side-nav {
   appearance: none; border: 0; background: none; display: flex; align-items: center; text-align: start; gap: 9px;

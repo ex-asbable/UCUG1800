@@ -21,7 +21,7 @@
     "directories": {
       "output": "../dist/release"
     },
-    "files": ["main.cjs", "preload.cjs", "icon.ico"],
+    "files": ["main.cjs", "preload.cjs", "updates.cjs", "icon.ico"],
     "extraResources": [
       { "from": "../dist/backend/ai-tutor-service", "to": "backend" }
     ],

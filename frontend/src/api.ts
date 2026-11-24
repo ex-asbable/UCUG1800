@@ -105,12 +105,26 @@ export type Check = {
 }
 export type Source = Ref & { filename: string; text: string; visualDescription: string; status: string; url: string; isPdf: boolean }
 
+export type DesktopUpdate = {
+  phase: 'idle' | 'checking' | 'current' | 'available' | 'downloading' | 'installing' | 'error'
+  currentVersion: string
+  availableVersion: string | null
+  progress: number
+  error: string | null
+}
+
 declare global {
   interface Window {
     tutorDesktop?: {
       remembered: (key: string) => string | null
       remember: (key: string, value: string | null) => void
       saveMarkdown: (filename: string, markdown: string) => Promise<boolean>
+      updates: {
+        status: () => Promise<DesktopUpdate | null>
+        check: () => Promise<DesktopUpdate | null>
+        install: () => Promise<DesktopUpdate | null>
+        onStatus: (callback: (status: DesktopUpdate) => void) => () => void
+      }
     }
   }
 }

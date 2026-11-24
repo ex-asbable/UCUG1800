@@ -810,7 +810,7 @@ Use the same keys in both locale files. Render copy for the active `locale` and 
 | `materials.ready` | 可以开始复习 | Ready to review |
 | `materials.failed` | 课件处理失败 | Could not process materials |
 | `materials.missing` | 材料缺失 | Missing material |
-| `materials.unreadable` | {location} 没有可提取的正文。请补传含文字的版本。 | No readable text was found at {location}. Upload a version with selectable text. |
+| `sourceNoPreview` | 打开原件查看这处课件。 | Open the original to view this source. |
 | `materials.unsupportedFormat` | 请选择 PDF 文件。 | Choose a PDF file. |
 | `topics.title` | 知识点目录 | Topic outline |
 | `tutor.newQuestion` | 提一个新问题 | Ask a new question |

@@ -13,6 +13,7 @@ import { Empty, Jobs, MathText, Modal, SourceModal, Sources, TopicButton } from 
 import { IndependentCheck } from './IndependentCheck'
 import { ModelSettings } from './ModelSettings'
 import { ReviewGuide } from './ReviewGuide'
+import { SoftwareUpdates } from './SoftwareUpdates'
 
 type ViewData = {
   locale: Locale
@@ -425,6 +426,7 @@ export function App() {
           <Settings2 size={16} /><span>{runtime?.provider === 'api' ? t.modelApi : runtime ? 'Codex CLI' : t.runtime}</span>
           {runtime && <i />}
         </button>
+        <SoftwareUpdates locale={locale} t={t} />
         <label className="language-select"><Languages size={17} aria-hidden="true" />
           <select aria-label={t.language} value={locale} disabled={loadingLanguage}
             onChange={(event) => void switchLanguage(event.target.value as Locale)}>
@@ -480,11 +482,6 @@ export function App() {
                 {item.status === 'attached' || !item.filename.toLowerCase().endsWith('.pdf') ?
                   <a className="text-button small" href={'/api/v1' + coursePath(courseId) + '/materials/' + item.id + '/original'}
                     download>{t.downloadOriginal}</a> : null}
-                {!!item.unreadablePages.length && <details className="unreadable">
-                  <summary>{t.unreadable}</summary>
-                  <Sources locale={locale} refs={item.unreadablePages.map((page) => ({ materialId: item.id, page }))}
-                    open={openSource} materialName={materialName} />
-                </details>}
               </div>
             ))}
           </section>

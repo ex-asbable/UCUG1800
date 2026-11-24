@@ -9,4 +9,14 @@ contextBridge.exposeInMainWorld('tutorDesktop', {
     ipcRenderer.send('tutor:remember', key, value)
   },
   saveMarkdown: (filename, markdown) => ipcRenderer.invoke('tutor:save-markdown', filename, markdown),
+  updates: {
+    status: () => ipcRenderer.invoke('tutor:update-status'),
+    check: () => ipcRenderer.invoke('tutor:update-check'),
+    install: () => ipcRenderer.invoke('tutor:update-install'),
+    onStatus: (callback) => {
+      const listener = (_event, status) => callback(status)
+      ipcRenderer.on('tutor:update-status', listener)
+      return () => ipcRenderer.removeListener('tutor:update-status', listener)
+    },
+  },
 })
